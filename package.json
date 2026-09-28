@@ -1,0 +1,11 @@
+{
+  "name": "3c-discord-bot",
+  "version": "1.0.0",
+  "description": "3C moderation, AFK, tickets and utility Discord bot",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "discord.js": "^14.24.2"
+  }
+}

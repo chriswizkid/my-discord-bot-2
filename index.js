@@ -1,0 +1,801 @@
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  PermissionsBitField,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ChannelType,
+  OverwriteType,
+} = require('discord.js');
+
+const fs = require('fs');
+const path = require('path');
+
+const TOKEN = process.env.DISCORD_TOKEN;
+if (!TOKEN) throw new Error('Missing DISCORD_TOKEN environment variable.');
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel, Partials.Message, Partials.GuildMember],
+});
+
+// Small JSON database. Good for testing. For a Render production bot,
+// move this to MongoDB/Postgres or a persistent Render disk so it survives restarts.
+const DATA_FILE = path.join(__dirname, 'data.json');
+const defaultData = {
+  prefixes: {},
+  warnings: {},
+  tickets: {},
+  auditLogChannels: {},
+};
+let data = loadData();
+function loadData() {
+  try { return { ...defaultData, ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) }; }
+  catch { return structuredClone(defaultData); }
+}
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+
+function auditColor(action) {
+  const map = {
+    WARN: 0xF39C12, UNWARN: 0xF1C40F, TIMEOUT: 0x95A5A6, UNTIMEOUT: 0x2ECC71,
+    KICK: 0xE67E22, BAN: 0xE74C3C, UNBAN: 0x2ECC71, ROLE: 0x5865F2,
+    NICKNAME: 0x5865F2, LOCK: 0xE67E22, UNLOCK: 0x2ECC71, SLOWMODE: 0x9B59B6,
+    PURGE: 0xE74C3C, TICKET: 0x3498DB, SAY: 0x5865F2, MODERATION: 0x5865F2,
+  };
+  return map[action] || 0x5865F2;
+}
+
+async function auditLog(guild, { action, moderator, target, reason, details, channel }) {
+  try {
+    const channelId = data.auditLogChannels?.[guild.id];
+    if (!channelId) return;
+    const logChannel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+    if (!logChannel || !logChannel.isTextBased()) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(auditColor(action))
+      .setTitle(`📋 ${action}`)
+      .addFields(
+        { name: 'Moderator', value: moderator ? `${moderator} (<@${moderator.id}>)` : 'Unknown', inline: true },
+        ...(target ? [{ name: 'Target', value: `${target.tag || target.name || target} ${target.id ? `(<@${target.id}>)` : ''}`, inline: true }] : []),
+        ...(channel ? [{ name: 'Channel', value: `${channel}`, inline: true }] : []),
+        ...(reason ? [{ name: 'Reason', value: truncate(reason, 1024), inline: false }] : []),
+        ...(details ? [{ name: 'Details', value: truncate(details, 1024), inline: false }] : []),
+      )
+      .setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+  } catch {}
+}
+
+
+const afk = new Map(); // guildId:userId -> { reason, since }
+const deletedSnipes = new Map(); // channelId -> message data
+const editedSnipes = new Map(); // channelId -> message data
+const tempMuteTimers = new Map();
+
+function getPrefix(guildId) { return data.prefixes[guildId] || '!'; }
+function key(guildId, userId) { return `${guildId}:${userId}`; }
+function cleanReason(parts) { return parts.join(' ').trim(); }
+function tokenize(text) {
+  const out = [];
+  const re = /\"([^\"]*)\"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+function truncate(s, n = 1024) { return String(s || '').slice(0, n); }
+function mention(userId) { return `<@${userId}>`; }
+function removeMentionArgs(args) { return args.filter(x => !/^<@!?\d+>$/.test(x)); }
+function removeUserAndRoleMentions(args) { return args.filter(x => !/^<@!?\d+>$/.test(x) && !/^<@&\d+>$/.test(x)); }
+function mentionedRole(guild, args) {
+  const token = args.find(x => /^<@&\d+>$/.test(x));
+  if (!token) return null;
+  return guild.roles.cache.get(token.slice(3, -1)) || null;
+}
+
+function parseDuration(input) {
+  if (!input) return null;
+  const m = String(input).trim().match(/^(\d+(?:\.\d+)?)(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  const mult = unit.startsWith('s') ? 1000 : unit.startsWith('m') ? 60000 : unit.startsWith('h') ? 3600000 : 86400000;
+  return Math.floor(n * mult);
+}
+function prettyDuration(ms) {
+  let s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60); s %= 60;
+  const out = [];
+  if (d) out.push(`${d}d`); if (h) out.push(`${h}h`); if (m) out.push(`${m}m`); if (s || !out.length) out.push(`${s}s`);
+  return out.join(' ');
+}
+function parseTime(input) {
+  const ms = parseDuration(input);
+  if (!ms) return null;
+  return ms;
+}
+function hasPerm(member, perm) { return member.permissions.has(perm); }
+function canAct(actor, target) {
+  if (!target) return false;
+  if (target.id === actor.id) return false;
+  if (target.id === target.guild.ownerId) return false;
+  return actor.id === target.guild.ownerId || actor.roles.highest.position > target.roles.highest.position;
+}
+async function safeDelete(msg) { try { await msg.delete(); } catch {} }
+async function sendTemp(channel, content) {
+  // Bot responses are intentionally permanent. User command messages are
+  // deleted separately by the command handler when appropriate.
+  return channel.send(content).catch(() => null);
+}
+
+function moderationDMEmbed(guild, action, moderator, reason) {
+  const colors = { warn: 0xF39C12, kick: 0xE67E22, ban: 0xE74C3C, mute: 0x95A5A6 };
+  const labels = { warn: 'Warned', kick: 'Kicked', ban: 'Banned', mute: 'Muted' };
+  const icon = guild.iconURL({ extension: 'png', size: 128 });
+  return new EmbedBuilder()
+    .setColor(colors[action] || 0xF39C12)
+    .setTitle(labels[action] || action)
+    .setDescription(`You have been ${action === 'kick' ? 'kicked' : action === 'ban' ? 'banned' : action === 'mute' ? 'muted' : 'warned'} in\n**${guild.name}**`)
+    .setThumbnail(icon || 'https://cdn.discordapp.com/embed/avatars/0.png')
+    .addFields(
+      { name: 'Moderator', value: moderator.tag || moderator.username, inline: false },
+      { name: 'Reason', value: reason ? truncate(reason) : '\u200b', inline: false },
+    )
+    .setFooter({ text: `Contact a staff member to discuss this ${action} • ${new Date().toLocaleString('en-GB', { timeZone: 'UTC' })} UTC` });
+}
+
+async function dmModeration(targetUser, guild, action, moderator, reason) {
+  try { await targetUser.send({ embeds: [moderationDMEmbed(guild, action, moderator, reason)] }); return true; }
+  catch { return false; }
+}
+
+function warningsFor(guildId, userId) {
+  const k = key(guildId, userId);
+  if (!Array.isArray(data.warnings[k])) data.warnings[k] = [];
+  return data.warnings[k];
+}
+
+function normalizeRoleName(text) {
+  return String(text || '')
+    // Discord custom emoji: <:name:id> / <a:name:id>
+    .replace(/<a?:[^:>]+:\d+>/g, ' ')
+    // Unicode emoji / symbols, variation selectors and zero-width joiners.
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D]/gu, ' ')
+    // Common decorative separators/text-art characters around role names.
+    .replace(/[|•·★☆◆◇►◄→←➜➤➥「」『』【】《》<>*_~`]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function findRole(guild, text) {
+  const rawWanted = String(text || '').trim();
+  const wanted = normalizeRoleName(rawWanted);
+  if (!wanted) return null;
+
+  // First try the exact role name, then the normalized name. This means
+  // users can type either the real emoji/decorated role name OR just its text.
+  return guild.roles.cache.find(r => r.name.trim().toLowerCase() === rawWanted.toLowerCase()) ||
+         guild.roles.cache.find(r => normalizeRoleName(r.name) === wanted) ||
+         guild.roles.cache.find(r => normalizeRoleName(r.name).includes(wanted));
+}
+
+function commandList(prefix) {
+  return [
+    [`${prefix}warn @user [reason]`, 'Warn a member and DM them the warning card.'],
+    [`${prefix}unwarn @user <number>`, 'Remove one or more warning numbers.'],
+    [`${prefix}warnings @user`, 'Show how many warnings a member has and list their warnings.'],
+    [`${prefix}mute @user <time> [reason]`, 'Timeout a member for a duration.'],
+    [`${prefix}unmute @user`, 'Remove a member timeout.'],
+    [`${prefix}afk [reason]`, 'Set yourself AFK; it is removed when you return.'],
+    [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
+    [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
+    [`${prefix}serverinfo`, 'Show server statistics and icon.'],
+    [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
+    [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
+    [`${prefix}slowmode <time|off>`, 'Set channel slowmode or turn it off, e.g. 10s, 5m, 1h, off.'],
+    [`${prefix}lock`, 'Lock this channel so @everyone cannot send messages.'],
+    [`${prefix}unlock`, 'Unlock this channel so @everyone can send messages again.'],
+    [`${prefix}p/ c/ purge <amount>`, 'Delete recent messages.'],
+    [`${prefix}s/ snipe`, 'Show the latest deleted message in this channel.'],
+    [`${prefix}cs`, 'Clear deleted-message snipes.'],
+    [`${prefix}es`, 'Show the latest edited message in this channel.'],
+    [`${prefix}ces`, 'Clear edited-message snipes.'],
+    [`${prefix}ticket`, 'Open the interactive ticket-panel setup.'],
+    [`${prefix}setupaudit`, 'Create the private 3C audit-log channel.'],
+    [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
+    [`${prefix}say <message>`, 'Send a message as the bot. Manage Server only.'],
+    [`${prefix}kick @user [reason]`, 'Kick a member and DM the kick card.'],
+    [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
+    [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
+    [`${prefix}pus @user <amount>`, 'Delete recent messages from one member.'],
+    [`${prefix}help <command>`, 'Explain one command.'],
+    [`${prefix}commands`, 'Show the full command list.'],
+  ];
+}
+
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
+});
+
+client.on('messageDelete', async (message) => {
+  if (!message.guild || !message.author || message.author.bot) return;
+  deletedSnipes.set(message.channel.id, {
+    authorId: message.author.id,
+    authorTag: message.author.tag,
+    content: message.content || '[no text]',
+    attachments: [...message.attachments.values()].map(a => a.url),
+    time: Date.now(),
+  });
+});
+
+client.on('messageUpdate', async (oldMessage, newMessage) => {
+  if (!oldMessage.guild || oldMessage.author?.bot) return;
+  if (oldMessage.partial || newMessage.partial) return;
+  if (oldMessage.content === newMessage.content) return;
+  editedSnipes.set(newMessage.channel.id, {
+    authorId: newMessage.author.id,
+    authorTag: newMessage.author.tag,
+    oldContent: oldMessage.content || '[no text]',
+    newContent: newMessage.content || '[no text]',
+    time: Date.now(),
+  });
+});
+
+client.on('messageCreate', async (message) => {
+  if (!message.guild || message.author.bot) return;
+  const prefix = getPrefix(message.guild.id);
+
+  // Mention an AFK member.
+  for (const user of message.mentions.users.values()) {
+    const a = afk.get(key(message.guild.id, user.id));
+    if (a) {
+      await sendTemp(message.channel, `💤 **${user.tag}** is AFK${a.reason ? ` — ${a.reason}` : ''}.`, 7000);
+    }
+  }
+
+  // Coming back from AFK.
+  const myAfkKey = key(message.guild.id, message.author.id);
+  const myAfk = afk.get(myAfkKey);
+  const isAfkCommand = message.content.trim().toLowerCase().startsWith(`${prefix}afk`);
+  if (myAfk && !isAfkCommand) {
+    afk.delete(myAfkKey);
+    await sendTemp(message.channel, `👋 Welcome back, ${message.author}! You were AFK for **${prettyDuration(Date.now() - myAfk.since)}**${myAfk.reason ? ` — ${myAfk.reason}` : ''}.`, 8000);
+  }
+
+  if (!message.content.startsWith(prefix)) return;
+  const body = message.content.slice(prefix.length).trim();
+  if (!body) return;
+  const args = tokenize(body);
+  const cmd = args.shift().toLowerCase();
+
+  // Keep the user's !cs/!ces message visible so the tick reaction can be seen.
+  // Every other recognized command deletes the user's command message only.
+  const noDeleteCommand = ['cs', 'ces'].includes(cmd);
+  if (!noDeleteCommand) await safeDelete(message);
+
+  const target = message.mentions.members.first();
+
+  try {
+    // AUDIT LOG SETUP
+    if (cmd === 'setupaudit' || cmd === 'auditsetup') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.');
+      const existingId = data.auditLogChannels?.[message.guild.id];
+      const existing = existingId ? (message.guild.channels.cache.get(existingId) || await message.guild.channels.fetch(existingId).catch(() => null)) : null;
+      if (existing) return sendTemp(message.channel, `📋 Audit log is already set to ${existing}.`, 7000);
+
+      const audit = await message.guild.channels.create({
+        name: '3c-audit-log',
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: message.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+          { id: message.author.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory] },
+          { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.EmbedLinks, PermissionsBitField.Flags.ReadMessageHistory] },
+        ],
+      });
+      data.auditLogChannels[message.guild.id] = audit.id;
+      saveData();
+      await audit.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('📋 3C Audit Log').setDescription('This channel records moderation actions and ticket activity from the 3C bot.').setTimestamp()] }).catch(() => {});
+      return sendTemp(message.channel, `✅ Created ${audit}.\n🔐 It is private by default. Add your staff/mod role to **View Channel** in its permissions so your staff can see it.`, 12000);
+    }
+
+    // WARN
+    if (cmd === 'warn') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}warn @user [reason]`, 5000);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot warn that member because of role hierarchy.', 5000);
+      const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
+      const list = warningsFor(message.guild.id, target.id);
+      list.push({ reason, moderatorId: message.author.id, at: Date.now() });
+      saveData();
+      await dmModeration(target.user, message.guild, 'warn', message.author, reason);
+      await auditLog(message.guild, { action: 'WARN', moderator: message.author, target: target.user, reason });
+      return message.channel.send(`⚠️ **${target.user.tag}** was warned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+    }
+
+    // UNWARN
+    if (cmd === 'unwarn') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}unwarn @user <number>`, 5000);
+      const nums = args.map(Number).filter(n => Number.isInteger(n) && n > 0);
+      if (!nums.length) return sendTemp(message.channel, `Usage: ${prefix}unwarn @user <warning number>`, 5000);
+      const list = warningsFor(message.guild.id, target.id);
+      const unique = [...new Set(nums)].sort((a,b) => b-a);
+      let removed = 0;
+      for (const n of unique) if (n <= list.length) { list.splice(n - 1, 1); removed++; }
+      saveData();
+      await auditLog(message.guild, { action: 'UNWARN', moderator: message.author, target: target.user, details: `Removed ${removed} warning${removed === 1 ? '' : 's'}.` });
+      return sendTemp(message.channel, `✅ Removed **${removed}** warning${removed === 1 ? '' : 's'} from ${target}.`, 6000);
+    }
+
+    // WARNINGS
+    if (cmd === 'warnings' || cmd === 'warns') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}warnings @user`, 5000);
+      const list = warningsFor(message.guild.id, target.id);
+      if (!list.length) return sendTemp(message.channel, `🛡️ **${target.user.tag}** has **0 warnings**.`, 6000);
+      const lines = list.map((w, i) => {
+        const reason = w.reason ? ` — ${truncate(w.reason, 350)}` : ' — No reason';
+        const mod = message.guild.members.cache.get(w.moderatorId)?.user.tag || 'Unknown moderator';
+        return `**${i + 1}.**${reason} • ${mod} • <t:${Math.floor(w.at / 1000)}:R>`;
+      });
+      // Discord embeds have a 4096-character description limit, so split the
+      // complete warning history across multiple embeds instead of hiding old warnings.
+      const chunks = [];
+      let chunk = '';
+      for (const line of lines) {
+        if ((chunk + line + '\n').length > 3900) { chunks.push(chunk.trim()); chunk = ''; }
+        chunk += line + '\n';
+      }
+      if (chunk.trim()) chunks.push(chunk.trim());
+      const embeds = chunks.map((text, index) => new EmbedBuilder()
+        .setColor(0xF39C12)
+        .setTitle(index === 0 ? `Warnings — ${target.user.tag}` : `Warnings — ${target.user.tag} (continued)`)
+        .setDescription(text)
+        .setFooter({ text: `Total warnings: ${list.length}` }));
+      return message.channel.send({ embeds });
+    }
+
+    // TIMEOUT / MUTE / UNTIMEOUT / UNMUTE
+    if (['mute', 'timeout'].includes(cmd)) {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.');
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}timeout @user <time> [reason]`);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot timeout that member because of role hierarchy.');
+      const cleanArgs = removeMentionArgs(args);
+      const ms = parseTime(cleanArgs[0]);
+      if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Timeout time must be between 1s and 28d, e.g. `10m`.');
+      const reason = cleanReason(cleanArgs.slice(1));
+      await target.timeout(ms, reason || undefined);
+      await auditLog(message.guild, { action: 'TIMEOUT', moderator: message.author, target: target.user, reason, details: `Duration: ${prettyDuration(ms)}` });
+      await dmModeration(target.user, message.guild, 'mute', message.author, reason);
+      return message.channel.send(`🔇 **${target.user.tag}** was timed out for **${prettyDuration(ms)}**${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+    }
+    if (['unmute', 'untimeout'].includes(cmd)) {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.');
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}untimeout @user`);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot remove that timeout because of role hierarchy.');
+      await target.timeout(null);
+      await auditLog(message.guild, { action: 'UNTIMEOUT', moderator: message.author, target: target.user });
+      return sendTemp(message.channel, `🔊 **${target.user.tag}** is no longer timed out.`);
+    }
+
+    // AFK
+    if (cmd === 'afk') {
+      const reason = cleanReason(args);
+      afk.set(myAfkKey, { reason, since: Date.now() });
+      return sendTemp(message.channel, `💤 **${message.author.username}** is now AFK${reason ? ` — ${reason}` : ''}.`, 6000);
+    }
+
+    // NICK
+    if (cmd === 'nick' || cmd === 'n') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageNicknames)) return sendTemp(message.channel, '❌ You need **Manage Nicknames** permission.', 5000);
+      if (!target || !args.length) return sendTemp(message.channel, `Usage: ${prefix}nick @user <nickname>`, 5000);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot nickname that member because of role hierarchy.', 5000);
+      const nickname = removeMentionArgs(args).join(' ').trim().slice(0, 32);
+      if (!nickname) return sendTemp(message.channel, `Usage: ${prefix}nick @user <nickname>`, 5000);
+      await target.setNickname(nickname);
+      await auditLog(message.guild, { action: 'NICKNAME', moderator: message.author, target: target.user, details: `New nickname: ${nickname}` });
+      return sendTemp(message.channel, `✏️ Changed **${target.user.tag}**'s nickname to **${nickname}**.`, 6000);
+    }
+    if (cmd === 'clearnick' || cmd === 'cn') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageNicknames)) return sendTemp(message.channel, '❌ You need **Manage Nicknames** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}clearnick @user`, 5000);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot nickname that member because of role hierarchy.', 5000);
+      await target.setNickname(null);
+      await auditLog(message.guild, { action: 'NICKNAME', moderator: message.author, target: target.user, details: 'Nickname cleared.' });
+      return sendTemp(message.channel, `✅ Cleared ${target}'s nickname.`, 6000);
+    }
+
+    // SERVER INFO
+    if (cmd === 'serverinfo') {
+      const owner = await message.guild.fetchOwner().catch(() => null);
+      const icon = message.guild.iconURL({ extension: 'png', size: 512 });
+      const e = new EmbedBuilder().setColor(0x5865F2).setTitle(message.guild.name).setThumbnail(icon || null)
+        .addFields(
+          { name: 'Owner', value: owner ? owner.user.tag : 'Unknown', inline: true },
+          { name: 'Members', value: String(message.guild.memberCount), inline: true },
+          { name: 'Humans', value: String(message.guild.members.cache.filter(m => !m.user.bot).size), inline: true },
+          { name: 'Bots', value: String(message.guild.members.cache.filter(m => m.user.bot).size), inline: true },
+          { name: 'Channels', value: String(message.guild.channels.cache.size), inline: true },
+          { name: 'Roles', value: String(message.guild.roles.cache.size), inline: true },
+          { name: 'Boosts', value: String(message.guild.premiumSubscriptionCount || 0), inline: true },
+          { name: 'Created', value: `<t:${Math.floor(message.guild.createdTimestamp / 1000)}:F>`, inline: false },
+        ).setFooter({ text: `Server ID: ${message.guild.id}` });
+      return message.channel.send({ embeds: [e] });
+    }
+
+    // ROLE
+    if (cmd === 'role' || cmd === 'r') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageRoles)) {
+        return sendTemp(message.channel, '❌ You need **Manage Roles** permission.', 5000);
+      }
+
+      const action = (args.shift() || '').toLowerCase();
+      if (!['add', 'give', 'remove'].includes(action) || !target) {
+        return sendTemp(message.channel, `Usage: ${prefix}role add|give|remove @user <role>`, 7000);
+      }
+
+      // Supports both `Role Name` and a real Discord role mention (`@Role`).
+      const role = mentionedRole(message.guild, args) || findRole(message.guild, removeUserAndRoleMentions(args).join(' '));
+      if (!role) {
+        return sendTemp(message.channel, '❌ I could not find that role. Use the exact role name or mention the role with `@Role`.', 7000);
+      }
+
+      const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+      if (!botMember) return sendTemp(message.channel, '❌ I could not check my bot role hierarchy. Please try again.', 5000);
+
+      if (role.id === message.guild.id || role.managed) {
+        return sendTemp(message.channel, '❌ That role is managed by Discord/integration and cannot be manually assigned.', 7000);
+      }
+
+      if (role.position >= botMember.roles.highest.position) {
+        return sendTemp(message.channel, `❌ I cannot manage **${role.name}**.
+Move my **highest bot role above ${role}** in **Server Settings → Roles**, then try again.`, 9000);
+      }
+
+      // Discord also prevents a bot from modifying members at or above its highest role.
+      if (target.id === message.guild.ownerId || target.roles.highest.position >= botMember.roles.highest.position) {
+        return sendTemp(message.channel, `❌ I cannot manage ${target} because their highest role is at or above my bot role.`, 8000);
+      }
+
+      try {
+        if (action === 'remove') {
+          if (!target.roles.cache.has(role.id)) {
+            return sendTemp(message.channel, `ℹ️ ${target} does not have **${role.name}**.`, 6000);
+          }
+          await target.roles.remove(role, `3C role command by ${message.author.tag}`);
+        } else {
+          if (target.roles.cache.has(role.id)) {
+            return sendTemp(message.channel, `ℹ️ ${target} already has **${role.name}**.`, 6000);
+          }
+          await target.roles.add(role, `3C role command by ${message.author.tag}`);
+        }
+      } catch (error) {
+        console.error('ROLE COMMAND ERROR:', error);
+        if (error?.code === 50013) {
+          return sendTemp(message.channel, '❌ Discord rejected the role change. Check that I have **Manage Roles**, my highest role is above the target role, and the target member is below my bot role.', 9000);
+        }
+        return sendTemp(message.channel, '❌ I could not change that role. Check my permissions and role hierarchy.', 7000);
+      }
+
+      await auditLog(message.guild, {
+        action: 'ROLE',
+        moderator: message.author,
+        target: target.user,
+        details: `${action === 'remove' ? 'Removed' : 'Added'} role: ${role.name}`,
+      });
+
+      return sendTemp(message.channel, `✅ ${action === 'remove' ? 'Removed' : 'Added'} **${role.name}** ${action === 'remove' ? 'from' : 'to'} ${target}.`, 6000);
+    }
+
+    // PREFIX
+    if (cmd === 'prefix') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      if (!args[0]) return sendTemp(message.channel, `Current prefix: \`${prefix}\``, 5000);
+      if (args[0].length > 5 || /\s/.test(args[0])) return sendTemp(message.channel, '❌ Prefix must be 1–5 characters with no spaces.', 5000);
+      data.prefixes[message.guild.id] = args[0]; saveData();
+      return sendTemp(message.channel, `✅ Prefix changed to \`${args[0]}\`.`, 6000);
+    }
+
+    // SLOWMODE
+    if (cmd === 'slowmode') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageChannels)) return sendTemp(message.channel, '❌ You need **Manage Channels** permission.', 5000);
+      const input = (args[0] || '').toLowerCase();
+      if (input === 'off') {
+        await message.channel.setRateLimitPerUser(0);
+        await auditLog(message.guild, { action: 'SLOWMODE', moderator: message.author, channel: message.channel, details: 'Slowmode disabled.' });
+        return sendTemp(message.channel, `🐌 Slowmode **disabled** in ${message.channel}.`, 6000);
+      }
+      const ms = parseTime(args[0]);
+      if (ms == null || ms < 0 || ms > 21600 * 1000) return sendTemp(message.channel, '❌ Slowmode must be 0–6h, e.g. `10s`, `2m`, `1h`, or `off`.', 5000);
+      await message.channel.setRateLimitPerUser(Math.floor(ms / 1000));
+      await auditLog(message.guild, { action: 'SLOWMODE', moderator: message.author, channel: message.channel, details: `Slowmode: ${prettyDuration(ms)}` });
+      return sendTemp(message.channel, `🐌 Slowmode set to **${prettyDuration(ms)}** in ${message.channel}.`, 6000);
+    }
+
+    // LOCK / UNLOCK CHANNEL
+    if (cmd === 'lock' || cmd === 'unlock') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageChannels)) return sendTemp(message.channel, '❌ You need **Manage Channels** permission.', 5000);
+      if (!message.guild.members.me.permissionsIn(message.channel).has(PermissionsBitField.Flags.ManageChannels)) return sendTemp(message.channel, '❌ I need **Manage Channels** permission in this channel.', 5000);
+
+      const everyone = message.guild.roles.everyone;
+      if (cmd === 'lock') {
+        await message.channel.permissionOverwrites.edit(everyone, { SendMessages: false });
+        await auditLog(message.guild, { action: 'LOCK', moderator: message.author, channel: message.channel });
+        return sendTemp(message.channel, '🔒 Channel **locked**. @\u200beveryone can no longer send messages.', 6000);
+      }
+
+      await message.channel.permissionOverwrites.edit(everyone, { SendMessages: null });
+      await auditLog(message.guild, { action: 'UNLOCK', moderator: message.author, channel: message.channel });
+      return sendTemp(message.channel, '🔓 Channel **unlocked**. @\u200beveryone can send messages again.', 6000);
+    }
+
+    // PURGE
+    if (cmd === 'p' || cmd === 'c' || cmd === 'purge') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission.', 5000);
+      const amount = Number(args[0]);
+      if (!Number.isInteger(amount) || amount < 1 || amount > 99) return sendTemp(message.channel, `Usage: ${prefix}purge <1-99>`, 5000);
+      // Include the user's command itself, while still deleting the requested number of other messages.
+      const fetched = await message.channel.messages.fetch({ limit: Math.min(100, amount + 1) });
+      const deleted = await message.channel.bulkDelete(fetched, true);
+      await auditLog(message.guild, { action: 'PURGE', moderator: message.author, channel: message.channel, details: `Deleted ${Math.max(0, deleted.size - 1)} messages + the command.` });
+      return sendTemp(message.channel, `🧹 Deleted **${Math.max(0, deleted.size - 1)}** messages + the command.`, 5000);
+    }
+
+    // SNIPE
+    if (cmd === 's' || cmd === 'snipe') {
+      const s = deletedSnipes.get(message.channel.id);
+      if (!s) return sendTemp(message.channel, 'Nothing to snipe in this channel.', 5000);
+      const e = new EmbedBuilder().setColor(0xED4245).setTitle('🗑️ Deleted message')
+        .setAuthor({ name: s.authorTag })
+        .setDescription(truncate(s.content, 4000))
+        .setTimestamp(s.time);
+      if (s.attachments?.length) e.addFields({ name: 'Attachments', value: s.attachments.map(x => `[attachment](${x})`).join('\n').slice(0, 1024) });
+      return message.channel.send({ embeds: [e] });
+    }
+    if (cmd === 'cs') {
+      deletedSnipes.delete(message.channel.id);
+      await message.react('✅').catch(() => {});
+      return;
+    }
+    if (cmd === 'es') {
+      const s = editedSnipes.get(message.channel.id);
+      if (!s) return sendTemp(message.channel, 'Nothing to snipe from edits in this channel.', 5000);
+      const e = new EmbedBuilder().setColor(0xFEE75C).setTitle('✏️ Edited message').setAuthor({ name: s.authorTag })
+        .addFields({ name: 'Before', value: truncate(s.oldContent, 1024) }, { name: 'After', value: truncate(s.newContent, 1024) }).setTimestamp(s.time);
+      return message.channel.send({ embeds: [e] });
+    }
+    if (cmd === 'ces') {
+      editedSnipes.delete(message.channel.id);
+      await message.react('✅').catch(() => {});
+      return;
+    }
+
+    // TICKET PANEL CREATOR
+    if (cmd === 'ticket') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.');
+
+      // Easy interactive setup: !ticket -> button -> modal.
+      if (!args.length) {
+        const setupId = `ticket:setup:${message.author.id}:${Date.now().toString(36)}`;
+        const button = new ButtonBuilder()
+          .setCustomId(setupId)
+          .setLabel('Configure Ticket Panel')
+          .setEmoji('🎟️')
+          .setStyle(ButtonStyle.Primary);
+        const embed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🎟️ Ticket Panel Setup')
+          .setDescription('Click the button below to configure your ticket panel. You can use spaces, multiple words, and line breaks in the title and description.');
+        return message.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] });
+      }
+
+      // Backwards-compatible argument format. Quoted strings allow spaces.
+      if (args.length < 4) return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> <title> <description>\nOr simply use \`${prefix}ticket\` for the setup menu.`);
+      const name = args.shift().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'ticket';
+      const colorText = args.shift();
+      const color = /^#?[0-9a-f]{6}$/i.test(colorText) ? parseInt(colorText.replace('#',''), 16) : 0x5865F2;
+      const title = args.shift();
+      const description = args.join(' ');
+      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+      data.tickets[id] = { name, color, title, description, guildId: message.guild.id, createdBy: message.author.id };
+      saveData();
+      const button = new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Create Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
+      const embed = new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setFooter({ text: 'Ticket system' });
+      await message.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] });
+      await auditLog(message.guild, { action: 'TICKET', moderator: message.author, channel: message.channel, details: `Ticket panel created: ${name}` });
+      return message.channel.send('✅ Ticket panel created.');
+    }
+
+    // CLOSE TICKET
+    if (cmd === 'closeticket' || cmd === 'ct') {
+      const topic = message.channel.topic || '';
+      if (!topic.startsWith('3C-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
+      const ownerId = topic.slice('3C-TICKET:'.length);
+      const isStaff = hasPerm(message.member, PermissionsBitField.Flags.ManageChannels);
+      if (message.author.id !== ownerId && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator or staff with Manage Channels can close this ticket.', 5000);
+      await message.channel.send('🔒 **Closing ticket...**').catch(() => {});
+      const ticketOwner = await client.users.fetch(ownerId).catch(() => null);
+      await auditLog(message.guild, { action: 'TICKET', moderator: message.author, target: ticketOwner || { id: ownerId, tag: ownerId }, channel: message.channel, details: `Ticket closed: ${message.channel.name}` });
+      setTimeout(() => message.channel.delete('Ticket closed').catch(() => {}), 1200);
+      return;
+    }
+
+    // SAY
+    if (cmd === 'say') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      if (!args.length) return sendTemp(message.channel, `Usage: ${prefix}say <message>`, 5000);
+      await safeDelete(message);
+      return message.channel.send(args.join(' '));
+    }
+
+    // KICK
+    if (cmd === 'kick') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.KickMembers)) return sendTemp(message.channel, '❌ You need **Kick Members** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}kick @user [reason]`, 5000);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot kick that member because of role hierarchy.', 5000);
+      const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
+      await dmModeration(target.user, message.guild, 'kick', message.author, reason);
+      await auditLog(message.guild, { action: 'KICK', moderator: message.author, target: target.user, reason });
+      await target.kick(reason || undefined);
+      return message.channel.send(`👢 **${target.user.tag}** was kicked${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+    }
+
+    // BAN
+    if (cmd === 'ban') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}ban @user [reason]`, 5000);
+      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot ban that member because of role hierarchy.', 5000);
+      const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
+      await dmModeration(target.user, message.guild, 'ban', message.author, reason);
+      await auditLog(message.guild, { action: 'BAN', moderator: message.author, target: target.user, reason });
+      await target.ban({ reason: reason || undefined });
+      return message.channel.send(`🔨 **${target.user.tag}** was banned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+    }
+
+    // UNBAN
+    if (cmd === 'unban') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
+      const id = args[0]?.replace(/[<@!>]/g, '');
+      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban <user ID>`, 5000);
+      const user = await client.users.fetch(id).catch(() => null);
+      if (!user) return sendTemp(message.channel, '❌ I could not find that Discord user ID.', 5000);
+      await message.guild.members.unban(id);
+      await auditLog(message.guild, { action: 'UNBAN', moderator: message.author, target: user });
+      return sendTemp(message.channel, `✅ Unbanned **${user.tag}**.`, 6000);
+    }
+
+    // PURGE USER
+    if (cmd === 'pus') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}pus @user <amount>`, 5000);
+      const amount = Number(removeMentionArgs(args)[0]);
+      if (!Number.isInteger(amount) || amount < 1 || amount > 100) return sendTemp(message.channel, `Usage: ${prefix}pus @user <1-100>`, 5000);
+      const fetched = await message.channel.messages.fetch({ limit: Math.min(100, amount + 10) });
+      const matches = fetched.filter(m => m.author.id === target.id).first(amount);
+      let deleted = 0;
+      const recent = matches.filter(m => Date.now() - m.createdTimestamp < 14 * 86400000);
+      if (recent.size) deleted += (await message.channel.bulkDelete(recent, true)).size;
+      for (const m of matches.filter(m => !recent.has(m.id)).values()) { await m.delete().then(() => deleted++).catch(() => {}); }
+      await auditLog(message.guild, { action: 'PURGE', moderator: message.author, target: target.user, channel: message.channel, details: `Deleted ${deleted} messages from this member.` });
+      return sendTemp(message.channel, `🧹 Deleted **${deleted}** messages from **${target.user.tag}**.`, 6000);
+    }
+
+    // HELP / COMMANDS
+    if (cmd === 'commands') {
+      const lines = commandList(prefix).map(([a,b]) => `**${a}** — ${b}`);
+      const e = new EmbedBuilder().setColor(0x5865F2).setTitle('3C Commands').setDescription(lines.join('\n')).setFooter({ text: `Prefix: ${prefix}` });
+      return message.channel.send({ embeds: [e] });
+    }
+    if (cmd === 'help') {
+      const wanted = (args[0] || '').toLowerCase().replace(prefix, '');
+      const found = commandList(prefix).find(([a]) => a.toLowerCase().replaceAll(prefix, '').split(/[ /]/)[0] === wanted);
+      if (!found) return sendTemp(message.channel, `Use ${prefix}commands to see every command.`, 6000);
+      const e = new EmbedBuilder().setColor(0x5865F2).setTitle(`Help: ${wanted}`).setDescription(found[1]).addFields({ name: 'Usage', value: found[0] });
+      return message.channel.send({ embeds: [e] });
+    }
+  } catch (err) {
+    console.error(`[${message.guild?.name}] ${cmd}`, err);
+    return sendTemp(message.channel, `❌ Something went wrong while running \`${cmd}\`. Check my permissions and role position.`, 7000);
+  }
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (interaction.isButton() && interaction.customId.startsWith('ticket:setup:')) {
+    const [, , ownerId] = interaction.customId.split(':');
+    if (interaction.user.id !== ownerId) {
+      return interaction.reply({ content: '❌ Only the person who started the ticket setup can use this button.', ephemeral: true });
+    }
+    const modal = new ModalBuilder()
+      .setCustomId(`ticket:modal:${ownerId}:${Date.now().toString(36)}`)
+      .setTitle('Create Ticket Panel');
+    const name = new TextInputBuilder().setCustomId('ticket_name').setLabel('Ticket name').setPlaceholder('support').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(40);
+    const color = new TextInputBuilder().setCustomId('ticket_color').setLabel('Embed color').setPlaceholder('#5865F2').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(7);
+    const title = new TextInputBuilder().setCustomId('ticket_title').setLabel('Embed title').setPlaceholder('Need help? Create a ticket!').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(256);
+    const description = new TextInputBuilder().setCustomId('ticket_description').setLabel('Embed description').setPlaceholder('Explain what users should do...').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(4000);
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(name),
+      new ActionRowBuilder().addComponents(color),
+      new ActionRowBuilder().addComponents(title),
+      new ActionRowBuilder().addComponents(description),
+    );
+    return interaction.showModal(modal);
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:modal:')) {
+    const ownerId = interaction.customId.split(':')[2];
+    if (interaction.user.id !== ownerId) return interaction.reply({ content: '❌ You cannot use this setup.', ephemeral: true });
+    const nameRaw = interaction.fields.getTextInputValue('ticket_name').trim();
+    const colorRaw = interaction.fields.getTextInputValue('ticket_color').trim();
+    const title = interaction.fields.getTextInputValue('ticket_title').trim();
+    const description = interaction.fields.getTextInputValue('ticket_description').trim();
+    const name = nameRaw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'ticket';
+    const color = /^#?[0-9a-f]{6}$/i.test(colorRaw) ? parseInt(colorRaw.replace('#',''), 16) : 0x5865F2;
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+    data.tickets[id] = { name, color, title, description, guildId: interaction.guildId, createdBy: interaction.user.id };
+    saveData();
+    const button = new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Create Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
+    const embed = new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setFooter({ text: 'Ticket system' });
+    await interaction.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] });
+    return interaction.reply({ content: '✅ Ticket panel created.', ephemeral: true });
+  }
+
+  if (!interaction.isButton()) return;
+  if (!interaction.customId.startsWith('ticket:create:')) return;
+  const id = interaction.customId.split(':')[2];
+  const config = data.tickets[id];
+  if (!config || config.guildId !== interaction.guildId) return interaction.reply({ content: '❌ This ticket panel no longer exists.', ephemeral: true });
+
+  const existing = interaction.guild.channels.cache.find(c => c.topic === `3C-TICKET:${interaction.user.id}`);
+  if (existing) return interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
+
+  const safeName = `${config.name}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
+  const channel = await interaction.guild.channels.create({
+    name: safeName || `${config.name}-ticket`,
+    type: ChannelType.GuildText,
+    topic: `3C-TICKET:${interaction.user.id}`,
+    permissionOverwrites: [
+      { id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+      { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] },
+      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageMessages] },
+    ],
+  });
+  const close = new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
+  const e = new EmbedBuilder().setColor(config.color).setTitle(config.title).setDescription(`${config.description}\n\nWelcome ${interaction.user}! A staff member will help you here.`);
+  await channel.send({ content: `${interaction.user}`, embeds: [e], components: [new ActionRowBuilder().addComponents(close)] });
+  await auditLog(interaction.guild, { action: 'TICKET', moderator: interaction.user, target: interaction.user, channel, details: `Ticket created: ${channel.name}` });
+  return interaction.reply({ content: `🎟️ Ticket created: ${channel}`, ephemeral: true });
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton() || interaction.customId !== 'ticket:close') return;
+  const topic = interaction.channel?.topic || '';
+  if (!topic.startsWith('3C-TICKET:')) return interaction.reply({ content: '❌ This is not a ticket.', ephemeral: true });
+  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels) && !topic.endsWith(interaction.user.id)) {
+    return interaction.reply({ content: '❌ You need Manage Channels to close this ticket.', ephemeral: true });
+  }
+  await interaction.reply('🔒 Closing ticket...');
+  const ownerId = topic.slice('3C-TICKET:'.length);
+  const ticketOwner = await client.users.fetch(ownerId).catch(() => null);
+  await auditLog(interaction.guild, { action: 'TICKET', moderator: interaction.user, target: ticketOwner || { id: ownerId, tag: ownerId }, channel: interaction.channel, details: `Ticket closed: ${interaction.channel.name}` });
+  setTimeout(() => interaction.channel.delete().catch(() => {}), 1200);
+});
+
+client.login(TOKEN);
