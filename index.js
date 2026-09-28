@@ -34,6 +34,7 @@ const defaultData = {
   prefixes: {},
   warnings: {},
   tickets: {},
+  auditChannels: {},
 };
 let data = loadData();
 function loadData() {
@@ -100,6 +101,24 @@ async function sendTemp(channel, content, ms = 7000) {
   return m;
 }
 
+async function auditLog(guild, title, description, color = 0x5865F2, fields = []) {
+  const channelId = data.auditChannels[guild.id];
+  if (!channelId) return;
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel || !channel.isTextBased()) return;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .setDescription(description || '\u200b')
+    .setTimestamp();
+  if (fields.length) embed.addFields(fields.slice(0, 25).map(f => ({
+    name: truncate(f.name, 256),
+    value: truncate(f.value, 1024) || '\u200b',
+    inline: !!f.inline
+  })));
+  await channel.send({ embeds: [embed] }).catch(() => {});
+}
+
 function moderationDMEmbed(guild, action, moderator, reason) {
   const colors = { warn: 0xF39C12, kick: 0xE67E22, ban: 0xE74C3C, mute: 0x95A5A6 };
   const labels = { warn: 'Warned', kick: 'Kicked', ban: 'Banned', mute: 'Muted' };
@@ -157,8 +176,8 @@ function commandList(prefix) {
     [`${prefix}warn @user [reason]`, 'Warn a member and DM them the warning card.'],
     [`${prefix}unwarn @user <number>`, 'Remove one or more warning numbers.'],
     [`${prefix}warnings @user`, 'Show how many warnings a member has and list their warnings.'],
-    [`${prefix}mute @user <time> [reason]`, 'Timeout a member for a duration.'],
-    [`${prefix}unmute @user`, 'Remove a member timeout.'],
+    [`${prefix}mute/timeout @user <time> [reason]`, 'Timeout a member for a duration.'],
+    [`${prefix}unmute/untimeout @user`, 'Remove a member timeout.'],
     [`${prefix}afk [reason]`, 'Set yourself AFK; it is removed when you return.'],
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
     [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
@@ -184,6 +203,7 @@ function commandList(prefix) {
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
     [`${prefix}help <command>`, 'Explain one command.'],
+    [`${prefix}setupaudit`, 'Create/setup the private 3C audit-log channel.'],
     [`${prefix}commands`, 'Show the full command list.'],
   ];
 }
@@ -313,6 +333,9 @@ client.on('messageCreate', async (message) => {
       list.push({ reason, moderatorId: message.author.id, at: Date.now() });
       saveData();
       await dmModeration(target.user, message.guild, 'warn', message.author, reason);
+      await auditLog(message.guild, '⚠️ Member Warned', `${target.user} was warned by ${message.author}.`, 0xF39C12, [
+        { name: 'Reason', value: reason || 'No reason' },
+      ]);
       return message.channel.send(`⚠️ **${target.user.tag}** was warned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
     }
 
@@ -346,7 +369,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // MUTE / UNMUTE
-    if (cmd === 'mute') {
+    if (cmd === 'mute' || cmd === 'timeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}mute @user <time> [reason]`, 5000);
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot mute that member because of role hierarchy.', 5000);
@@ -355,9 +378,13 @@ client.on('messageCreate', async (message) => {
       const reason = cleanReason(args.slice(1));
       await target.timeout(ms, reason || undefined);
       await dmModeration(target.user, message.guild, 'mute', message.author, reason);
+      await auditLog(message.guild, '🔇 Member Muted', `${target.user} was muted by ${message.author}.`, 0x95A5A6, [
+        { name: 'Duration', value: prettyDuration(ms) },
+        { name: 'Reason', value: reason || 'No reason' },
+      ]);
       return message.channel.send(`🔇 **${target.user.tag}** was muted for **${prettyDuration(ms)}**${reason ? ` — ${reason}` : ''}.`).catch(() => {});
     }
-    if (cmd === 'unmute') {
+    if (cmd === 'unmute' || cmd === 'untimeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}unmute @user`, 5000);
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot unmute that member because of role hierarchy.', 5000);
@@ -513,6 +540,10 @@ client.on('messageCreate', async (message) => {
       const button = new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel(`Create ${title}`.slice(0, 80)).setEmoji('🎟️').setStyle(ButtonStyle.Primary);
       const embed = new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setFooter({ text: 'Ticket system' });
       await message.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] });
+      await auditLog(message.guild, '🎟️ Ticket Panel Created', `${message.author} created a ticket panel in ${message.channel}.`, 0x5865F2, [
+        { name: 'Panel Name', value: name },
+        { name: 'Title', value: title },
+      ]);
       return sendTemp(message.channel, '✅ Ticket panel created.', 5000);
     }
 
@@ -544,6 +575,9 @@ client.on('messageCreate', async (message) => {
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'kick', message.author, reason);
       await target.kick(reason || undefined);
+      await auditLog(message.guild, '👢 Member Kicked', `${target.user} was kicked by ${message.author}.`, 0xE67E22, [
+        { name: 'Reason', value: reason || 'No reason' },
+      ]);
       return message.channel.send(`👢 **${target.user.tag}** was kicked${reason ? ` — ${reason}` : ''}.`).catch(() => {});
     }
 
@@ -555,6 +589,9 @@ client.on('messageCreate', async (message) => {
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'ban', message.author, reason);
       await target.ban({ reason: reason || undefined });
+      await auditLog(message.guild, '🔨 Member Banned', `${target.user} was banned by ${message.author}.`, 0xE74C3C, [
+        { name: 'Reason', value: reason || 'No reason' },
+      ]);
       return message.channel.send(`🔨 **${target.user.tag}** was banned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
     }
 
@@ -582,6 +619,44 @@ client.on('messageCreate', async (message) => {
       if (recent.size) deleted += (await message.channel.bulkDelete(recent, true)).size;
       for (const m of matches.filter(m => !recent.has(m.id)).values()) { await m.delete().then(() => deleted++).catch(() => {}); }
       return sendTemp(message.channel, `🧹 Deleted **${deleted}** messages from **${target.user.tag}**.`, 6000);
+    }
+
+    // AUDIT LOG SETUP
+    if (cmd === 'setupaudit') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) {
+        return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      }
+
+      let auditChannel = message.guild.channels.cache.get(data.auditChannels[message.guild.id]);
+      if (!auditChannel) {
+        auditChannel = message.guild.channels.cache.find(c => c.name === '3c-audit-log' && c.type === ChannelType.GuildText);
+      }
+
+      if (!auditChannel) {
+        auditChannel = await message.guild.channels.create({
+          name: '3c-audit-log',
+          type: ChannelType.GuildText,
+          permissionOverwrites: [
+            {
+              id: message.guild.roles.everyone.id,
+              deny: [PermissionsBitField.Flags.ViewChannel],
+            },
+          ],
+        });
+      }
+
+      data.auditChannels[message.guild.id] = auditChannel.id;
+      saveData();
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('🛡️ Audit Log Enabled')
+        .setDescription('3C audit logging is now enabled in this channel.')
+        .addFields({ name: 'Channel', value: String(auditChannel) })
+        .setTimestamp();
+
+      await auditChannel.send({ embeds: [embed] }).catch(() => {});
+      return sendTemp(message.channel, `✅ Audit logs are now set up in ${auditChannel}.`, 6000);
     }
 
     // HELP / COMMANDS
@@ -627,6 +702,10 @@ client.on('interactionCreate', async (interaction) => {
   const close = new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
   const e = new EmbedBuilder().setColor(config.color).setTitle(config.title).setDescription(`${config.description}\n\nWelcome ${interaction.user}! A staff member will help you here.`);
   await channel.send({ content: `${interaction.user}`, embeds: [e], components: [new ActionRowBuilder().addComponents(close)] });
+  await auditLog(interaction.guild, '🎟️ Ticket Created', `${channel} was created by ${interaction.user}.`, 0x5865F2, [
+    { name: 'Ticket Creator', value: `${interaction.user.tag} (${interaction.user.id})` },
+    { name: 'Channel', value: `${channel}` },
+  ]);
   return interaction.reply({ content: `🎟️ Ticket created: ${channel}`, ephemeral: true });
 });
 
@@ -638,6 +717,10 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.reply({ content: '❌ You need Manage Channels to close this ticket.', ephemeral: true });
   }
   await interaction.reply('🔒 Closing ticket...');
+  await auditLog(interaction.guild, '🔒 Ticket Closed', `${interaction.channel} was closed by ${interaction.user}.`, 0xED4245, [
+    { name: 'Closed By', value: `${interaction.user.tag} (${interaction.user.id})` },
+    { name: 'Channel', value: interaction.channel.name },
+  ]);
   setTimeout(() => interaction.channel.delete().catch(() => {}), 1200);
 });
 
