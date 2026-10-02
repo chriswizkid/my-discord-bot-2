@@ -49,6 +49,14 @@ const afk = new Map(); // guildId:userId -> { reason, since }
 const deletedSnipes = new Map(); // channelId -> message data
 const editedSnipes = new Map(); // channelId -> message data
 const tempMuteTimers = new Map();
+const blehhhCooldowns = new Map();
+const blehhhTimers = new Map();
+const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
+const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
+const BLEHHH_ROLE_ID = '1555571971801088031';
+const BLEHHH_COOLDOWN_MS = 10 * 1000;
+const BLEHHH_MIN_MS = 10 * 1000;
+const BLEHHH_MAX_MS = 30 * 60 * 1000;
 
 function getPrefix(guildId) { return data.prefixes[guildId] || '!'; }
 function key(guildId, userId) { return `${guildId}:${userId}`; }
@@ -202,6 +210,7 @@ function commandList(prefix) {
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
+    [`${prefix}blehhh @user <10s-30m>`, 'Give a member the Blehhh role for a temporary duration (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
     [`${prefix}setupaudit`, 'Create/setup the private 3C audit-log channel.'],
     [`${prefix}commands`, 'Show the full command list.'],
@@ -323,6 +332,74 @@ client.on('messageCreate', async (message) => {
         await message.reply("Couldn't get a GIF right now 😭");
     }
 }
+    // BLEHHH
+    if (cmd === 'blehhh') {
+      const hasBoosterRole =
+        message.member.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
+        message.member.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
+
+      if (!hasBoosterRole) {
+        return sendTemp(message.channel, '❌ Only server boosters or members with the **booster toooo** role can use this command.', 6000);
+      }
+
+      if (!target) {
+        return sendTemp(message.channel, `Usage: ${prefix}blehhh @user <10s-30m>`, 6000);
+      }
+
+      const durationInput = args.find(x => /^\d+(?:\.\d+)?(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes)$/i.test(x));
+      const duration = parseDuration(durationInput);
+      if (!duration || duration < BLEHHH_MIN_MS || duration > BLEHHH_MAX_MS) {
+        return sendTemp(message.channel, '❌ Blehhh time must be between **10s and 30m**.', 6000);
+      }
+
+      const cooldownKey = key(message.guild.id, message.author.id);
+      const now = Date.now();
+      const cooldownUntil = blehhhCooldowns.get(cooldownKey) || 0;
+      if (cooldownUntil > now) {
+        return sendTemp(message.channel, `⏳ You can use \`${prefix}blehhh\` again in **${Math.ceil((cooldownUntil - now) / 1000)}s**.`, 5000);
+      }
+      blehhhCooldowns.set(cooldownKey, now + BLEHHH_COOLDOWN_MS);
+      setTimeout(() => {
+        if ((blehhhCooldowns.get(cooldownKey) || 0) <= Date.now()) blehhhCooldowns.delete(cooldownKey);
+      }, BLEHHH_COOLDOWN_MS + 250);
+
+      const blehhhRole = message.guild.roles.cache.get(BLEHHH_ROLE_ID) ||
+        message.guild.roles.cache.find(r => r.name.toLowerCase() === 'blehhh');
+
+      if (!blehhhRole) {
+        return sendTemp(message.channel, '❌ I could not find the **blehhh** role. Check the role ID/name.', 6000);
+      }
+      if (blehhhRole.managed || !message.guild.members.me || blehhhRole.position >= message.guild.members.me.roles.highest.position) {
+        return sendTemp(message.channel, '❌ I cannot give the **blehhh** role. Move my bot role above it.', 6000);
+      }
+
+      try {
+        const timerKey = key(message.guild.id, target.id);
+        const oldTimer = blehhhTimers.get(timerKey);
+        if (oldTimer) clearTimeout(oldTimer);
+
+        await target.roles.add(blehhhRole, `Blehhh by ${message.author.tag} for ${prettyDuration(duration)}`);
+
+        const blehhhEmoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
+        if (blehhhEmoji) await message.react(blehhhEmoji).catch(() => {});
+        else await message.react('😛').catch(() => {});
+
+        const timer = setTimeout(async () => {
+          blehhhTimers.delete(timerKey);
+          const freshMember = await message.guild.members.fetch(target.id).catch(() => null);
+          if (freshMember?.roles.cache.has(blehhhRole.id)) {
+            await freshMember.roles.remove(blehhhRole, 'Blehhh duration expired').catch(() => {});
+          }
+        }, duration);
+        blehhhTimers.set(timerKey, timer);
+
+        return sendTemp(message.channel, `😛 ${target} has **blehhh** for **${prettyDuration(duration)}**!`, 5000);
+      } catch (err) {
+        console.error('Blehhh role error:', err);
+        return sendTemp(message.channel, '❌ I could not give the **blehhh** role. Check my role position and Manage Roles permission.', 6000);
+      }
+    }
+
     // WARN
     if (cmd === 'warn') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
@@ -443,7 +520,13 @@ client.on('messageCreate', async (message) => {
       const role = findRole(message.guild, removeMentionArgs(args).join(' '));
       if (!role) return sendTemp(message.channel, '❌ I could not find that role. Type the role name normally; no special formatting is needed.', 5000);
       if (role.managed || role.position >= message.guild.members.me.roles.highest.position) return sendTemp(message.channel, '❌ I cannot manage that role. Move my bot role above it.', 5000);
-      if (action === 'remove') await target.roles.remove(role); else await target.roles.add(role);
+      try {
+        if (action === 'remove') await target.roles.remove(role);
+        else await target.roles.add(role);
+      } catch (roleErr) {
+        console.error('Role assignment error:', roleErr);
+        return sendTemp(message.channel, '❌ I could not change that role. Make sure my bot role is above the role you are trying to give/remove and that I have **Manage Roles**.', 6000);
+      }
       return sendTemp(message.channel, `✅ ${action === 'remove' ? 'Removed' : 'Added'} **${role.name}** ${action === 'remove' ? 'from' : 'to'} ${target}.`, 6000);
     }
 
@@ -490,10 +573,21 @@ client.on('messageCreate', async (message) => {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission.', 5000);
       const amount = Number(args[0]);
       if (!Number.isInteger(amount) || amount < 1 || amount > 99) return sendTemp(message.channel, `Usage: ${prefix}purge <1-99>`, 5000);
-      // Include the user's command itself, while still deleting the requested number of other messages.
+
+      // Delete the requested number of other messages, plus the user's command.
       const fetched = await message.channel.messages.fetch({ limit: Math.min(100, amount + 1) });
       const deleted = await message.channel.bulkDelete(fetched, true);
-      return sendTemp(message.channel, `🧹 Deleted **${Math.max(0, deleted.size - 1)}** messages + the command.`, 5000);
+      const deletedOtherMessages = Math.max(0, deleted.size - (deleted.has(message.id) ? 1 : 0));
+
+      if (deletedOtherMessages > 10) {
+        await auditLog(message.guild, '🧹 Messages Purged', `${message.author} purged **${deletedOtherMessages}** messages in ${message.channel}.`, 0x5865F2, [
+          { name: 'Moderator', value: `${message.author.tag} (${message.author.id})` },
+          { name: 'Channel', value: `${message.channel} (${message.channel.id})` },
+          { name: 'Messages Deleted', value: String(deletedOtherMessages), inline: true },
+        ]);
+      }
+
+      return sendTemp(message.channel, `🧹 Deleted **${deletedOtherMessages}** messages + the command.`, 5000);
     }
 
     // SNIPE
@@ -623,8 +717,8 @@ client.on('messageCreate', async (message) => {
 
     // AUDIT LOG SETUP
     if (cmd === 'setupaudit') {
-      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) {
-        return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      if (!hasPerm(message.member, PermissionsBitField.Flags.Administrator)) {
+        return sendTemp(message.channel, '❌ Only members with **Administrator** permission can use `${prefix}setupaudit`.', 5000);
       }
 
       let auditChannel = message.guild.channels.cache.get(data.auditChannels[message.guild.id]);
