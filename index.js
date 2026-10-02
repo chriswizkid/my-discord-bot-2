@@ -211,6 +211,7 @@ function commandList(prefix) {
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
     [`${prefix}blehhh @user <10s-30m>`, 'Give a member the Blehhh role for a temporary duration (boosters only).'],
+    [`${prefix}unblehhh @user`, 'Remove the Blehhh role immediately (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
     [`${prefix}setupaudit`, 'Create/setup the private 3C audit-log channel.'],
     [`${prefix}commands`, 'Show the full command list.'],
@@ -220,6 +221,14 @@ function commandList(prefix) {
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
+});
+
+// React to every message from a member currently holding the Blehhh role.
+client.on('messageCreate', async (message) => {
+  if (!message.guild || message.author.bot) return;
+  if (!message.member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
+  const emoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
+  if (emoji) await message.react(emoji).catch(() => {});
 });
 
 client.on('messageDelete', async (message) => {
@@ -400,6 +409,21 @@ client.on('messageCreate', async (message) => {
       }
     }
 
+    // UNBLEHHH
+    if (cmd === 'unblehhh') {
+      const allowed = message.member.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) || message.member.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
+      if (!allowed) return sendTemp(message.channel, '❌ Only Server Boosters or Boost toooo can use this command.', 6000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}unblehhh @user`, 6000);
+      const role = message.guild.roles.cache.get(BLEHHH_ROLE_ID);
+      if (!role) return sendTemp(message.channel, '❌ I could not find the Blehhh role.', 6000);
+      const timerKey = key(message.guild.id, target.id);
+      const timer = blehhhTimers.get(timerKey);
+      if (timer) clearTimeout(timer);
+      blehhhTimers.delete(timerKey);
+      await target.roles.remove(role, `Unblehhh by ${message.author.tag}`).catch(() => {});
+      await auditLog(message.guild, '😛 Member Unblehhh’d', `${target.user} was unblehhh’d by ${message.author}.`, 0x5865F2);
+      return sendTemp(message.channel, `✅ ${target} is no longer **blehhh**.`, 5000);
+    }
     // WARN
     if (cmd === 'warn') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
