@@ -7,6 +7,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelSelectMenuBuilder,
   ChannelType,
   OverwriteType,
 } = require('discord.js');
@@ -666,39 +667,38 @@ client.on('messageCreate', async (message) => {
       const title = args.shift();
       const description = args.join(' ').trim();
 
-      // Tickets inherit the category of the channel containing the panel.
-      const parent = message.channel.parent;
-      const categoryId = parent?.type === ChannelType.GuildCategory ? parent.id : null;
-
+      // Ticket destination is selected by the member from the server's EXISTING categories.
+      // The bot does not create or modify categories.
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id] = {
         name, color, title, description,
         guildId: message.guild.id,
         createdBy: message.author.id,
-        categoryId,
+        categoryId: null,
       };
       saveData();
 
-      const button = new ButtonBuilder()
-        .setCustomId(`ticket:create:${id}`)
-        .setLabel(`Create ${title}`.slice(0, 80))
-        .setEmoji('🎟️')
-        .setStyle(ButtonStyle.Primary);
+      const categorySelect = new ChannelSelectMenuBuilder()
+        .setCustomId(`ticket:category:${id}`)
+        .setPlaceholder('Select Ticket Category')
+        .setChannelTypes(ChannelType.GuildCategory)
+        .setMinValues(1)
+        .setMaxValues(1);
 
       const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(title)
         .setDescription(description)
-        .setFooter({ text: parent ? `Tickets → ${parent.name}` : 'Ticket system' });
+        .setFooter({ text: 'Choose an existing category below — the ticket will be created inside it.' });
 
       await message.channel.send({
         embeds: [embed],
-        components: [new ActionRowBuilder().addComponents(button)],
+        components: [new ActionRowBuilder().addComponents(categorySelect)],
       });
 
       await auditLog(message.guild, '🎟️ Ticket Panel Created', `${message.author} created a ticket panel in ${message.channel}.`, 0x5865F2, [
         { name: 'Panel Name', value: name },
-        { name: 'Category', value: parent ? parent.name : 'No category' },
+        { name: 'Ticket Destination', value: 'Selected from existing server categories' },
         { name: 'Title', value: title },
       ]);
       return sendTemp(message.channel, '✅ Ticket panel created.', 5000);
@@ -850,23 +850,34 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
-  if (!interaction.customId.startsWith('ticket:create:')) return;
+  const isOldButton = interaction.isButton() && interaction.customId.startsWith('ticket:create:');
+  const isCategorySelect = interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:category:');
+  if (!isOldButton && !isCategorySelect) return;
+
   const id = interaction.customId.split(':')[2];
   const config = data.tickets[id];
-  if (!config || config.guildId !== interaction.guildId) return interaction.reply({ content: '❌ This ticket panel no longer exists.', ephemeral: true });
+  if (!config || config.guildId !== interaction.guildId) {
+    return interaction.reply({ content: '❌ This ticket panel no longer exists.', ephemeral: true });
+  }
 
   const existing = interaction.guild.channels.cache.find(c => c.topic === `3C-TICKET:${interaction.user.id}`);
   if (existing) return interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
 
+  // New panels use the category selected from the Discord Channel Select menu.
+  // Old panels keep their saved categoryId for backwards compatibility.
+  const selectedCategoryId = isCategorySelect ? interaction.values[0] : config.categoryId;
+  const category = selectedCategoryId ? interaction.guild.channels.cache.get(selectedCategoryId) : null;
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    return interaction.reply({ content: '❌ Please select a valid existing ticket category.', ephemeral: true });
+  }
+
   const safeName = `${config.name}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
-  const category = config.categoryId && interaction.guild.channels.cache.get(config.categoryId);
   let channel;
   try {
     channel = await interaction.guild.channels.create({
       name: safeName || `${config.name}-ticket`,
       type: ChannelType.GuildText,
-      parent: category?.type === ChannelType.GuildCategory ? category.id : undefined,
+      parent: category.id,
       topic: `3C-TICKET:${interaction.user.id}`,
       permissionOverwrites: [
       { id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
@@ -884,6 +895,7 @@ client.on('interactionCreate', async (interaction) => {
   await auditLog(interaction.guild, '🎟️ Ticket Created', `${channel} was created by ${interaction.user}.`, 0x5865F2, [
     { name: 'Ticket Creator', value: `${interaction.user.tag} (${interaction.user.id})` },
     { name: 'Channel', value: `${channel}` },
+    { name: 'Category', value: `${category.name}` },
   ]);
   return interaction.reply({ content: `🎟️ Ticket created: ${channel}`, ephemeral: true });
 });
