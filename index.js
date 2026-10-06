@@ -102,6 +102,13 @@ function canAct(actor, target) {
   if (target.id === target.guild.ownerId) return false;
   return actor.id === target.guild.ownerId || actor.roles.highest.position > target.roles.highest.position;
 }
+
+function canBotModerate(target) {
+  const me = target?.guild?.members?.me;
+  if (!me || !target) return false;
+  if (target.id === target.guild.ownerId) return false;
+  return me.roles.highest.position > target.roles.highest.position;
+}
 async function safeDelete(msg) { try { await msg.delete(); } catch {} }
 async function sendTemp(channel, content, ms = 7000) {
   const m = await channel.send(content).catch(() => null);
@@ -200,9 +207,9 @@ function commandList(prefix) {
     [`${prefix}cs`, 'Clear deleted-message snipes.'],
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
-    [`${prefix}ticket <name> <color> <title> <description>`, 'Create a reusable ticket panel.'],
+    [`${prefix}ticket <name> <color> "<title>" "<description>"`, 'Create a ticket panel; tickets are created in the panel channel’s category.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
-    [`${prefix}say <message>`, 'Send a message as the bot. Manage Server only.'],
+    [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}kick @user [reason]`, 'Kick a member and DM the kick card.'],
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
@@ -213,7 +220,7 @@ function commandList(prefix) {
     [`${prefix}blehhh @user <10s-30m>`, 'Give a member the Blehhh role for a temporary duration (boosters only).'],
     [`${prefix}unblehhh @user`, 'Remove the Blehhh role immediately (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
-    [`${prefix}setupaudit`, 'Create/setup the private 3C audit-log channel.'],
+    [`${prefix}setupaudit #channel`, 'Connect 3C audit logs to an existing channel; never creates a new channel.'],
     [`${prefix}commands`, 'Show the full command list.'],
   ];
 }
@@ -343,6 +350,10 @@ client.on('messageCreate', async (message) => {
 }
     // BLEHHH
     if (cmd === 'blehhh') {
+      if (message.member.roles.cache.has(BLEHHH_ROLE_ID)) {
+        return sendTemp(message.channel, '❌ Members with the **Blehhh** role cannot use this command.', 6000);
+      }
+
       const hasBoosterRole =
         message.member.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
         message.member.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
@@ -473,7 +484,7 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'mute' || cmd === 'timeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}mute @user <time> [reason]`, 5000);
-      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot mute that member because of role hierarchy.', 5000);
+      if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot mute that member because their highest role is equal to or higher than my bot role.', 5000);
       const ms = parseTime(args[0]);
       if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Mute time must be between 1s and 28d, e.g. `10m`.', 5000);
       const reason = cleanReason(args.slice(1));
@@ -488,7 +499,7 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'unmute' || cmd === 'untimeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}unmute @user`, 5000);
-      if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot unmute that member because of role hierarchy.', 5000);
+      if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot unmute that member because their highest role is equal to or higher than my bot role.', 5000);
       await target.timeout(null);
       return sendTemp(message.channel, `🔊 **${target.user.tag}** was unmuted.`, 6000);
     }
@@ -646,25 +657,51 @@ client.on('messageCreate', async (message) => {
     // TICKET PANEL CREATOR
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      if (args.length < 4) return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> <title> <description>`, 7000);
+      if (args.length < 4) return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> "<title>" "<description>"`, 7000);
+
       const name = args.shift().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'ticket';
       const colorText = args.shift();
       const color = /^#?[0-9a-f]{6}$/i.test(colorText) ? parseInt(colorText.replace('#',''), 16) : 0x5865F2;
       const title = args.shift();
-      const description = args.join(' ');
+      const description = args.join(' ').trim();
+
+      // Tickets inherit the category of the channel containing the panel.
+      const parent = message.channel.parent;
+      const categoryId = parent?.type === ChannelType.GuildCategory ? parent.id : null;
+
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.tickets[id] = { name, color, title, description, guildId: message.guild.id, createdBy: message.author.id };
+      data.tickets[id] = {
+        name, color, title, description,
+        guildId: message.guild.id,
+        createdBy: message.author.id,
+        categoryId,
+      };
       saveData();
-      const button = new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel(`Create ${title}`.slice(0, 80)).setEmoji('🎟️').setStyle(ButtonStyle.Primary);
-      const embed = new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setFooter({ text: 'Ticket system' });
-      await message.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] });
+
+      const button = new ButtonBuilder()
+        .setCustomId(`ticket:create:${id}`)
+        .setLabel(`Create ${title}`.slice(0, 80))
+        .setEmoji('🎟️')
+        .setStyle(ButtonStyle.Primary);
+
+      const embed = new EmbedBuilder()
+        .setColor(color)
+        .setTitle(title)
+        .setDescription(description)
+        .setFooter({ text: parent ? `Tickets → ${parent.name}` : 'Ticket system' });
+
+      await message.channel.send({
+        embeds: [embed],
+        components: [new ActionRowBuilder().addComponents(button)],
+      });
+
       await auditLog(message.guild, '🎟️ Ticket Panel Created', `${message.author} created a ticket panel in ${message.channel}.`, 0x5865F2, [
         { name: 'Panel Name', value: name },
+        { name: 'Category', value: parent ? parent.name : 'No category' },
         { name: 'Title', value: title },
       ]);
       return sendTemp(message.channel, '✅ Ticket panel created.', 5000);
     }
-
     // CLOSE TICKET
     if (cmd === 'closeticket' || cmd === 'ct') {
       const topic = message.channel.topic || '';
@@ -677,14 +714,31 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // SAY
+    // SAY — use raw message content so spacing, newlines, #, @ and Discord formatting survive.
     if (cmd === 'say') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      if (!args.length) return sendTemp(message.channel, `Usage: ${prefix}say <message>`, 5000);
+      const rawSay = message.content.slice(prefix.length + cmd.length).trimStart();
+      if (!rawSay) return sendTemp(message.channel, `Usage: ${prefix}say <message>`, 5000);
       await safeDelete(message);
-      return message.channel.send(args.join(' '));
+      return message.channel.send({ content: rawSay, allowedMentions: { parse: [] } });
     }
 
+    // REPLY — reply/select a message first, then use !reply <message>.
+    if (cmd === 'reply') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      const rawReply = message.content.slice(prefix.length + cmd.length).trimStart();
+      const referenceId = message.reference?.messageId;
+      if (!referenceId) return sendTemp(message.channel, `❌ First reply to the message you want to target, then use ${prefix}reply <message>.`, 6000);
+      if (!rawReply) return sendTemp(message.channel, `Usage: ${prefix}reply <message>`, 5000);
+      const referenced = await message.channel.messages.fetch(referenceId).catch(() => null);
+      if (!referenced) return sendTemp(message.channel, '❌ I could not find the selected message.', 5000);
+      await safeDelete(message);
+      return message.channel.send({
+        content: rawReply,
+        reply: { messageReference: referenced.id, failIfNotExists: false },
+        allowedMentions: { parse: [] },
+      });
+    }
     // KICK
     if (cmd === 'kick') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.KickMembers)) return sendTemp(message.channel, '❌ You need **Kick Members** permission.', 5000);
@@ -739,44 +793,42 @@ client.on('messageCreate', async (message) => {
       return sendTemp(message.channel, `🧹 Deleted **${deleted}** messages from **${target.user.tag}**.`, 6000);
     }
 
-    // AUDIT LOG SETUP
+    // AUDIT LOG SETUP — connect to an EXISTING channel; never create one.
     if (cmd === 'setupaudit') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.Administrator)) {
-        return sendTemp(message.channel, '❌ Only members with **Administrator** permission can use `${prefix}setupaudit`.', 5000);
+        return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupaudit.`, 5000);
       }
 
-      let auditChannel = message.guild.channels.cache.get(data.auditChannels[message.guild.id]);
-      if (!auditChannel) {
-        auditChannel = message.guild.channels.cache.find(c => c.name === '3c-audit-log' && c.type === ChannelType.GuildText);
+      const mentionedChannel = message.mentions.channels.first();
+      const requestedId = args.find(x => /^\d{15,25}$/.test(x));
+      const auditChannel = mentionedChannel ||
+        (requestedId ? message.guild.channels.cache.get(requestedId) : null) ||
+        (message.channel.type === ChannelType.GuildText ? message.channel : null);
+
+      if (!auditChannel || !auditChannel.isTextBased() || auditChannel.guildId !== message.guild.id) {
+        return sendTemp(message.channel, `❌ Use ${prefix}setupaudit #existing-audit-channel (or run ${prefix}setupaudit inside that channel).`, 7000);
       }
 
-      if (!auditChannel) {
-        auditChannel = await message.guild.channels.create({
-          name: '3c-audit-log',
-          type: ChannelType.GuildText,
-          permissionOverwrites: [
-            {
-              id: message.guild.roles.everyone.id,
-              deny: [PermissionsBitField.Flags.ViewChannel],
-            },
-          ],
-        });
-      }
+      const me = message.guild.members.me;
+      const canWrite = me && auditChannel.permissionsFor(me).has([
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.EmbedLinks,
+      ]);
+      if (!canWrite) return sendTemp(message.channel, '❌ I cannot write in that audit channel. Give the bot View Channel, Send Messages and Embed Links.', 7000);
 
       data.auditChannels[message.guild.id] = auditChannel.id;
       saveData();
-
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('🛡️ Audit Log Enabled')
-        .setDescription('3C audit logging is now enabled in this channel.')
-        .addFields({ name: 'Channel', value: String(auditChannel) })
-        .setTimestamp();
-
-      await auditChannel.send({ embeds: [embed] }).catch(() => {});
-      return sendTemp(message.channel, `✅ Audit logs are now set up in ${auditChannel}.`, 6000);
+      await auditChannel.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🛡️ 3C Audit Log Connected')
+          .setDescription('This existing channel is now the 3C bot audit-log destination.')
+          .addFields({ name: 'Channel', value: String(auditChannel) })
+          .setTimestamp()]
+      }).catch(() => {});
+      return sendTemp(message.channel, `✅ 3C audit logs are now connected to ${auditChannel}.`, 6000);
     }
-
     // HELP / COMMANDS
     if (cmd === 'commands') {
       const lines = commandList(prefix).map(([a,b]) => `**${a}** — ${b}`);
@@ -807,16 +859,24 @@ client.on('interactionCreate', async (interaction) => {
   if (existing) return interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
 
   const safeName = `${config.name}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
-  const channel = await interaction.guild.channels.create({
-    name: safeName || `${config.name}-ticket`,
-    type: ChannelType.GuildText,
-    topic: `3C-TICKET:${interaction.user.id}`,
-    permissionOverwrites: [
+  const category = config.categoryId && interaction.guild.channels.cache.get(config.categoryId);
+  let channel;
+  try {
+    channel = await interaction.guild.channels.create({
+      name: safeName || `${config.name}-ticket`,
+      type: ChannelType.GuildText,
+      parent: category?.type === ChannelType.GuildCategory ? category.id : undefined,
+      topic: `3C-TICKET:${interaction.user.id}`,
+      permissionOverwrites: [
       { id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
       { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] },
       { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageMessages] },
-    ],
-  });
+      ],
+    });
+  } catch (err) {
+    console.error('Ticket channel creation error:', err);
+    return interaction.reply({ content: '❌ I could not create the ticket. Check that the bot has Manage Channels and that the ticket category still exists.', ephemeral: true });
+  }
   const close = new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
   const e = new EmbedBuilder().setColor(config.color).setTitle(config.title).setDescription(`${config.description}\n\nWelcome ${interaction.user}! A staff member will help you here.`);
   await channel.send({ content: `${interaction.user}`, embeds: [e], components: [new ActionRowBuilder().addComponents(close)] });
