@@ -847,7 +847,7 @@ client.on('interactionCreate', async (interaction) => {
       if(!name||color===null||!title||embedColor===null||!description) return interaction.reply({content:'❌ Use 6-digit hex colors like `#5865F2`.',ephemeral:true});
       config.name=name; config.color=color; config.title=title; config.description=description; config.embedColor=embedColor; config.categoryId=null; config.tagId=null; config.tagType=null;
       saveData();
-      const tagSelect=new MentionableSelectMenuBuilder().setCustomId(`ticket:settag:${id}`).setPlaceholder('Select Role/User to Tag').setMinValues(1).setMaxValues(1);
+      const tagSelect=new MentionableSelectMenuBuilder().setCustomId(`ticket:settag:${id}`).setPlaceholder('Select Roles/Users to Tag').setMinValues(1).setMaxValues(25);
       const select=new ChannelSelectMenuBuilder().setCustomId(`ticket:setupcategory:${id}`).setPlaceholder('Select Ticket Category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
       const fmt=n=>`#${n.toString(16).padStart(6,'0').toUpperCase()}`;
       return interaction.reply({embeds:[new EmbedBuilder().setColor(embedColor).setTitle('🎟️ Ticket Panel Setup').setDescription(`**Ticket name:** ${name}\n**Ticket color:** ${fmt(color)}\n**Embed name:** ${title}\n**Embed color:** ${fmt(embedColor)}\n**Ticket description:** ${description}\n\nSelect the role/user to tag, then select the existing category where tickets should be created.`)],components:[new ActionRowBuilder().addComponents(tagSelect),new ActionRowBuilder().addComponents(select)],ephemeral:true});
@@ -857,12 +857,23 @@ client.on('interactionCreate', async (interaction) => {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
       if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
-      const selectedId=interaction.values[0];
-      const role=interaction.guild.roles.cache.get(selectedId);
-      if(role){ config.tagId=role.id; config.tagType='role'; }
-      else { const user=await client.users.fetch(selectedId).catch(()=>null); if(!user) return interaction.reply({content:'❌ I could not find that user or role.',ephemeral:true}); config.tagId=user.id; config.tagType='user'; }
+      const selectedIds=[...new Set(interaction.values)];
+      const tags=[];
+      for(const selectedId of selectedIds){
+        const role=interaction.guild.roles.cache.get(selectedId);
+        if(role) tags.push({id:role.id,type:'role'});
+        else {
+          const user=await client.users.fetch(selectedId).catch(()=>null);
+          if(user) tags.push({id:user.id,type:'user'});
+        }
+      }
+      if(!tags.length) return interaction.reply({content:'❌ I could not find any valid users or roles.',ephemeral:true});
+      config.tagIds=tags.map(t=>t.id);
+      config.tagTypes=tags.map(t=>t.type);
+      config.tagId=tags[0].id;
+      config.tagType=tags[0].type;
       saveData();
-      return interaction.update({content:'✅ Tag selected. Now select the Ticket Category.',embeds:[],components:interaction.message.components});
+      return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now select the Ticket Category.`,embeds:[],components:interaction.message.components});
     }
     if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:setupcategory:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
@@ -886,19 +897,24 @@ client.on('interactionCreate', async (interaction) => {
       if(existing) return interaction.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
       const category=interaction.guild.channels.cache.get(config.categoryId);
       if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ This panel has no valid ticket category.',ephemeral:true});
-      const safeName=`${config.name}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90)||'ticket';
+      const safeBase=String(config.name||'ticket').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'ticket';
+      const safeUser=String(interaction.user.username||interaction.user.id).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,25)||interaction.user.id;
+      const safeName=`${safeBase}-ticket-${safeUser}`.slice(0,95);
       let channel;
       try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}`,permissionOverwrites:[
         {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
         {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
-        ...(config.tagType==='role'&&config.tagId?[{id:config.tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}]:[]),
-        ...(config.tagType==='user'&&config.tagId?[{id:config.tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}]:[]),
+        ...((config.tagIds|| (config.tagId?[config.tagId]:[])).map((tagId,i)=>({id:tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}))),
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`);
-      const tag=config.tagId?(config.tagType==='role'?`<@&${config.tagId}>`:`<@${config.tagId}>`):'';
-      await channel.send({content:[interaction.user.toString(),tag].filter(Boolean).join(' '),embeds:[emb],components:[new ActionRowBuilder().addComponents(close)],allowedMentions:{users:config.tagType==='user'?[config.tagId,interaction.user.id]:[interaction.user.id],roles:config.tagType==='role'?[config.tagId]:[]}});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.title});
+      const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
+      const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
+      const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
+      const taggedUsers=tagIds.filter((tagId,i)=>tagTypes[i]==='user');
+      const taggedRoles=tagIds.filter((tagId,i)=>tagTypes[i]==='role');
+      await channel.send({content:[interaction.user.toString(),...tagMentions].join(' '),embeds:[emb],components:[new ActionRowBuilder().addComponents(close)],allowedMentions:{users:[interaction.user.id,...taggedUsers],roles:taggedRoles}});
       await auditLog(interaction.guild,'🎟️ Ticket Created',`${channel} was created by ${interaction.user}.`,0x57F287,[{name:'Ticket Name',value:config.name},{name:'Ticket Creator',value:`${interaction.user.tag} (${interaction.user.id})`},{name:'Channel',value:`${channel} (${channel.id})`},{name:'Category',value:`${category.name} (${category.id})`}]);
       return interaction.reply({content:`🎟️ ${config.name} created: ${channel}`,ephemeral:true});
     }
