@@ -210,6 +210,7 @@ function commandList(prefix) {
     [`${prefix}ticket <name> <color> "<title>" "<description>"`, 'Create a ticket panel; tickets are created in the panel channel’s category.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
+    [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
     [`${prefix}kick @user [reason]`, 'Kick a member and DM the kick card.'],
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
