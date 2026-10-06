@@ -8,6 +8,9 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   ChannelType,
   OverwriteType,
 } = require('discord.js');
@@ -36,13 +39,12 @@ const defaultData = {
   warnings: {},
   tickets: {},
   auditChannels: {},
-  ticketCategory: {},
 };
 let data = loadData();
 function loadData() {
   try {
     const saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    return { ...defaultData, ...saved, ticketCategory: { ...(saved.ticketCategory || {}) } };
+    return { ...defaultData, ...saved };
   } catch { return structuredClone(defaultData); }
 }
 function saveData() {
@@ -211,8 +213,7 @@ function commandList(prefix) {
     [`${prefix}cs`, 'Clear deleted-message snipes.'],
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
-    [`${prefix}ticketcategory #category`, 'Set the existing category where tickets will be created.'],
-    [`${prefix}ticket <name> <color> "<title>" "<description>"`, 'Create a ticket panel in the current channel; tickets are created in the configured category.'],
+    [`${prefix}ticket`, 'Create a ticket panel, then select the existing Discord category for that panel.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
@@ -660,84 +661,17 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // TICKET DESTINATION CATEGORY
-    if (cmd === 'ticketcategory' || cmd === 'tc') {
-      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) {
-        return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      }
-
-      const mentionedCategory = message.mentions.channels.first();
-      const requestedId = args.find(x => /^\\d{15,25}$/.test(x));
-      const category = mentionedCategory ||
-        (requestedId ? message.guild.channels.cache.get(requestedId) : null);
-
-      if (!category || category.type !== ChannelType.GuildCategory) {
-        return sendTemp(message.channel, `Usage: ${prefix}ticketcategory #existing-category`, 7000);
-      }
-
-      data.ticketCategory[message.guild.id] = category.id;
-      saveData();
-
-      await auditLog(message.guild, '🎟️ Ticket Category Updated', `${message.author} set the ticket destination category to **${category.name}**.`, 0x5865F2, [
-        { name: 'Category', value: `${category.name} (${category.id})` },
-      ]);
-
-      return sendTemp(message.channel, `✅ Ticket destination set to **${category.name}**. Run ${prefix}ticket in any channel to create the panel there.`, 7000);
-    }
-
     // TICKET PANEL CREATOR
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      if (args.length === 0) {
-        args.push('ticket', '5865F2', 'Support Ticket', 'Open a ticket and a private ticket channel will be created in the configured ticket category.');
-      } else if (args.length < 4) {
-        return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> "<title>" "<description>" (or just ${prefix}ticket for the default panel)`, 7000);
-      }
-
-      const name = args.shift().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'ticket';
-      const colorText = args.shift();
-      const color = /^#?[0-9a-f]{6}$/i.test(colorText) ? parseInt(colorText.replace('#',''), 16) : 0x5865F2;
-      const title = args.shift();
-      const description = args.join(' ').trim();
-
-      const categoryId = data.ticketCategory[message.guild.id];
-      const category = categoryId ? message.guild.channels.cache.get(categoryId) : null;
-      if (!category || category.type !== ChannelType.GuildCategory) {
-        return sendTemp(message.channel, `❌ No ticket category is configured. First run ${prefix}ticketcategory #existing-category`, 7000);
-      }
-
-      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.tickets[id] = {
-        name, color, title, description,
-        guildId: message.guild.id,
-        createdBy: message.author.id,
-        categoryId: category.id,
-      };
+      const id = `muwkfkm2-${Math.random().toString(36).slice(2,7)}`;
+      data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, categoryId: null, name: 'ticket', color: 0x5865F2, title: '🎟️ Support Tickets', description: 'Open a private ticket using the button below.' };
       saveData();
-
-      const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(title)
-        .setDescription(description)
-        .setFooter({ text: `Tickets will be created in: ${category.name}` });
-
-      const openButton = new ButtonBuilder()
-        .setCustomId(`ticket:create:${id}`)
-        .setLabel('Open Ticket')
-        .setEmoji('🎟️')
-        .setStyle(ButtonStyle.Primary);
-
-      await message.channel.send({
-        embeds: [embed],
-        components: [new ActionRowBuilder().addComponents(openButton)],
-      });
-
-      await auditLog(message.guild, '🎟️ Ticket Panel Created', `${message.author} created a ticket panel in ${message.channel}.`, 0x5865F2, [
-        { name: 'Panel Name', value: name },
-        { name: 'Ticket Destination', value: `${category.name} (${category.id})` },
-        { name: 'Title', value: title },
-      ]);
-      return sendTemp(message.channel, '✅ Ticket panel created.', 5000);
+      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎟️ Ticket Panel Setup').setDescription('Select the **existing Discord category** where tickets from this panel should be created.\n\nOnly the panel creator or someone with **Manage Server** can configure it.');
+      const select = new ChannelSelectMenuBuilder().setCustomId(`ticket:setupcategory:${id}`).setPlaceholder('Select Ticket Category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
+      await message.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] });
+      await auditLog(message.guild, '🎟️ Ticket Panel Created', `${message.author} created a ticket panel in ${message.channel}.`, 0x5865F2);
+      return;
     }
     // CLOSE TICKET
     if (cmd === 'closeticket' || cmd === 'ct') {
@@ -746,11 +680,12 @@ client.on('messageCreate', async (message) => {
       const ownerId = topic.slice('3C-TICKET:'.length);
       const isStaff = hasPerm(message.member, PermissionsBitField.Flags.ManageChannels);
       if (message.author.id !== ownerId && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator or staff with Manage Channels can close this ticket.', 5000);
-      await message.channel.send('🔒 **Closing ticket...**').catch(() => {});
-      setTimeout(() => message.channel.delete('Ticket closed').catch(() => {}), 1200);
-      return;
+      const modal = new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
+      const reason = new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000);
+      modal.addComponents(new ActionRowBuilder().addComponents(reason));
+      await message.delete().catch(()=>{});
+      return message.channel.send('🔒 Use the **Close Ticket** button to enter the close reason.').then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000));
     }
-
     // SAY — use raw message content so spacing, newlines, #, @ and Discord formatting survive.
     if (cmd === 'say') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
@@ -886,65 +821,65 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-  const isOldButton = interaction.isButton() && interaction.customId.startsWith('ticket:create:');
-  if (!isOldButton) return;
-
-  const id = interaction.customId.split(':')[2];
-  const config = data.tickets[id];
-  if (!config || config.guildId !== interaction.guildId) {
-    return interaction.reply({ content: '❌ This ticket panel no longer exists.', ephemeral: true });
-  }
-
-  const existing = interaction.guild.channels.cache.find(c => c.topic === `3C-TICKET:${interaction.user.id}`);
-  if (existing) return interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
-
-  const category = config.categoryId ? interaction.guild.channels.cache.get(config.categoryId) : null;
-  if (!category || category.type !== ChannelType.GuildCategory) {
-    return interaction.reply({ content: '❌ Please select a valid existing ticket category.', ephemeral: true });
-  }
-
-  const safeName = `${config.name}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
-  let channel;
   try {
-    channel = await interaction.guild.channels.create({
-      name: safeName || `${config.name}-ticket`,
-      type: ChannelType.GuildText,
-      parent: category.id,
-      topic: `3C-TICKET:${interaction.user.id}`,
-      permissionOverwrites: [
-      { id: interaction.guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-      { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] },
-      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageMessages] },
-      ],
-    });
-  } catch (err) {
-    console.error('Ticket channel creation error:', err);
-    return interaction.reply({ content: '❌ I could not create the ticket. Check that the bot has Manage Channels and that the ticket category still exists.', ephemeral: true });
+    if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:setupcategory:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this panel.',ephemeral:true});
+      const category=interaction.guild.channels.cache.get(interaction.values[0]);
+      if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ Select an existing Discord category.',ephemeral:true});
+      config.categoryId=category.id; saveData();
+      const embed=new EmbedBuilder().setColor(config.color).setTitle(config.title).setDescription('Click **Open Ticket** to create a private ticket.').setFooter({text:`Tickets will be created in: ${category.name}`});
+      const open=new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Open Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
+      await interaction.update({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
+      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} selected **${category.name}** for this panel.`,0x5865F2,[{name:'Category',value:`${category.name} (${category.id})`}]);
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:create:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
+      const existing=interaction.guild.channels.cache.find(c=>c.topic===`3C-TICKET:${interaction.user.id}`);
+      if(existing) return interaction.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
+      const category=interaction.guild.channels.cache.get(config.categoryId);
+      if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ This panel has no valid ticket category. Ask staff to configure it again.',ephemeral:true});
+      const safeName=`ticket-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90);
+      let channel;
+      try {
+        channel=await interaction.guild.channels.create({name:safeName||'ticket',type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}`,permissionOverwrites:[
+          {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
+          {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
+          {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
+        ]});
+      } catch(err) { console.error('Ticket channel creation error:',err); return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true}); }
+      const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.title).setDescription(`Welcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`);
+      await channel.send({content:`${interaction.user}`,embeds:[emb],components:[new ActionRowBuilder().addComponents(close)]});
+      await auditLog(interaction.guild,'🎟️ Ticket Created',`${channel} was created by ${interaction.user}.`,0x57F287,[{name:'Ticket Creator',value:`${interaction.user.tag} (${interaction.user.id})`},{name:'Channel',value:`${channel} (${channel.id})`},{name:'Category',value:`${category.name} (${category.id})`}]);
+      return interaction.reply({content:`🎟️ Ticket created: ${channel}`,ephemeral:true});
+    }
+    if (interaction.isButton() && interaction.customId==='ticket:close') {
+      const topic=interaction.channel?.topic||'';
+      if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
+      const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ Only the ticket creator or Manage Channels staff can close this ticket.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
+      const input=new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return interaction.showModal(modal);
+    }
+    if (interaction.isModalSubmit() && interaction.customId==='ticket:closemodal') {
+      const topic=interaction.channel?.topic||'';
+      if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
+      const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ You cannot close this ticket.',ephemeral:true});
+      const reason=interaction.fields.getTextInputValue('ticket:closereason').trim(), ticket=interaction.channel, category=ticket.parent;
+      await auditLog(interaction.guild,'🔒 Ticket Closed',`${ticket} was closed by ${interaction.user}.`,0xED4245,[{name:'Closed By',value:`${interaction.user.tag} (${interaction.user.id})`},{name:'Ticket Creator',value:`<@${ownerId}> (${ownerId})`},{name:'Channel',value:`#${ticket.name} (${ticket.id})`},{name:'Category',value:category?`${category.name} (${category.id})`:'Unknown'},{name:'Close Reason',value:truncate(reason||'No reason provided')}]);
+      await interaction.reply({content:`🔒 Ticket closed. Reason: **${reason}**`});
+      setTimeout(()=>ticket.delete(`Ticket closed by ${interaction.user.tag}: ${reason}`.slice(0,512)).catch(()=>{}),1200);
+    }
+  } catch(err) {
+    console.error('Ticket interaction error:',err);
+    if(!interaction.replied&&!interaction.deferred) await interaction.reply({content:'❌ Something went wrong with the ticket.',ephemeral:true}).catch(()=>{});
   }
-  const close = new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-  const e = new EmbedBuilder().setColor(config.color).setTitle(config.title).setDescription(`${config.description}\n\nWelcome ${interaction.user}! A staff member will help you here.`);
-  await channel.send({ content: `${interaction.user}`, embeds: [e], components: [new ActionRowBuilder().addComponents(close)] });
-  await auditLog(interaction.guild, '🎟️ Ticket Created', `${channel} was created by ${interaction.user}.`, 0x5865F2, [
-    { name: 'Ticket Creator', value: `${interaction.user.tag} (${interaction.user.id})` },
-    { name: 'Channel', value: `${channel}` },
-    { name: 'Category', value: `${category.name}` },
-  ]);
-  return interaction.reply({ content: `🎟️ Ticket created: ${channel}`, ephemeral: true });
-});
-
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton() || interaction.customId !== 'ticket:close') return;
-  const topic = interaction.channel?.topic || '';
-  if (!topic.startsWith('3C-TICKET:')) return interaction.reply({ content: '❌ This is not a ticket.', ephemeral: true });
-  if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageChannels) && !topic.endsWith(interaction.user.id)) {
-    return interaction.reply({ content: '❌ You need Manage Channels to close this ticket.', ephemeral: true });
-  }
-  await interaction.reply('🔒 Closing ticket...');
-  await auditLog(interaction.guild, '🔒 Ticket Closed', `${interaction.channel} was closed by ${interaction.user}.`, 0xED4245, [
-    { name: 'Closed By', value: `${interaction.user.tag} (${interaction.user.id})` },
-    { name: 'Channel', value: interaction.channel.name },
-  ]);
-  setTimeout(() => interaction.channel.delete().catch(() => {}), 1200);
 });
 
 client.login(TOKEN);
