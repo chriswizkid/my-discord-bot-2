@@ -8,6 +8,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
+  MentionableSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -843,21 +844,26 @@ client.on('interactionCreate', async (interaction) => {
       const name=interaction.fields.getTextInputValue('ticket:name').trim(), color=hex(interaction.fields.getTextInputValue('ticket:color'));
       const title=interaction.fields.getTextInputValue('ticket:embedname').trim(), embedColor=hex(interaction.fields.getTextInputValue('ticket:embedcolor'));
       const description=interaction.fields.getTextInputValue('ticket:description').trim();
-      const rawTag='';
       if(!name||color===null||!title||embedColor===null||!description) return interaction.reply({content:'❌ Use 6-digit hex colors like `#5865F2`.',ephemeral:true});
       config.name=name; config.color=color; config.title=title; config.description=description; config.embedColor=embedColor; config.categoryId=null; config.tagId=null; config.tagType=null;
-      if(rawTag){
-        const um=rawTag.match(/^<@!?(\d{15,25})>$/), rm=rawTag.match(/^<@&(\d{15,25})>$/);
-        if(um){ if(!await client.users.fetch(um[1]).catch(()=>null)) return interaction.reply({content:'❌ I could not find that user.',ephemeral:true}); config.tagId=um[1]; config.tagType='user'; }
-        else if(rm){ if(!interaction.guild.roles.cache.has(rm[1])) return interaction.reply({content:'❌ I could not find that role.',ephemeral:true}); config.tagId=rm[1]; config.tagType='role'; }
-        else return interaction.reply({content:'❌ Mention a user or role in the tag field.',ephemeral:true});
-      }
       saveData();
+      const tagSelect=new MentionableSelectMenuBuilder().setCustomId(`ticket:settag:${id}`).setPlaceholder('Select Role/User to Tag').setMinValues(1).setMaxValues(1);
       const select=new ChannelSelectMenuBuilder().setCustomId(`ticket:setupcategory:${id}`).setPlaceholder('Select Ticket Category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
       const fmt=n=>`#${n.toString(16).padStart(6,'0').toUpperCase()}`;
-      return interaction.reply({embeds:[new EmbedBuilder().setColor(embedColor).setTitle('🎟️ Ticket Panel Setup').setDescription(`**Ticket name:** ${name}\n**Ticket color:** ${fmt(color)}\n**Embed name:** ${title}\n**Embed color:** ${fmt(embedColor)}\n**Ticket description:** ${description}\n**Role/user to tag:** ${config.tagId?(config.tagType==='role'?`<@&${config.tagId}>`:`<@${config.tagId}>`):'None'}\n\nSelect the **existing Discord category** where tickets should be created.`)],components:[new ActionRowBuilder().addComponents(select)],ephemeral:true});
+      return interaction.reply({embeds:[new EmbedBuilder().setColor(embedColor).setTitle('🎟️ Ticket Panel Setup').setDescription(`**Ticket name:** ${name}\n**Ticket color:** ${fmt(color)}\n**Embed name:** ${title}\n**Embed color:** ${fmt(embedColor)}\n**Ticket description:** ${description}\n\nSelect the role/user to tag, then select the existing category where tickets should be created.`)],components:[new ActionRowBuilder().addComponents(tagSelect),new ActionRowBuilder().addComponents(select)],ephemeral:true});
     }
 
+    if (interaction.isMentionableSelectMenu() && interaction.customId.startsWith('ticket:settag:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
+      const selectedId=interaction.values[0];
+      const role=interaction.guild.roles.cache.get(selectedId);
+      if(role){ config.tagId=role.id; config.tagType='role'; }
+      else { const user=await client.users.fetch(selectedId).catch(()=>null); if(!user) return interaction.reply({content:'❌ I could not find that user or role.',ephemeral:true}); config.tagId=user.id; config.tagType='user'; }
+      saveData();
+      return interaction.update({content:'✅ Tag selected. Now select the Ticket Category.',embeds:[],components:interaction.message.components});
+    }
     if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:setupcategory:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
@@ -865,11 +871,12 @@ client.on('interactionCreate', async (interaction) => {
       const category=interaction.guild.channels.cache.get(interaction.values[0]);
       if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ Select an existing Discord category.',ephemeral:true});
       config.categoryId=category.id; saveData();
+      if(!config.tagId||!config.tagType) return interaction.update({content:'✅ Category saved! Now select the Role/User to Tag.',embeds:[],components:interaction.message.components});
       const open=new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Open Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
-      const embed=new EmbedBuilder().setColor(config.embedColor).setTitle(config.title).setDescription(config.description).setFooter({text:`Tickets will be created in: ${category.name}`});
+      const embed=new EmbedBuilder().setColor(config.embedColor).setTitle(config.title).setDescription(config.description);
       await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
       await interaction.update({content:'✅ Ticket panel created! The panel is now visible to everyone in this channel.',embeds:[],components:[]});
-      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** in **${category.name}**.`,0x5865F2);
+      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category.`,0x5865F2);
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('ticket:create:')) {
@@ -884,6 +891,8 @@ client.on('interactionCreate', async (interaction) => {
       try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}`,permissionOverwrites:[
         {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
         {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
+        ...(config.tagType==='role'&&config.tagId?[{id:config.tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}]:[]),
+        ...(config.tagType==='user'&&config.tagId?[{id:config.tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}]:[]),
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
