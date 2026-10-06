@@ -831,8 +831,7 @@ client.on('interactionCreate', async (interaction) => {
         new ActionRowBuilder().addComponents(f('ticket:color','Ticket color','#5865F2',TextInputStyle.Short,true,7)),
         new ActionRowBuilder().addComponents(f('ticket:embedname','Embed name','Create Tryout Ticket',TextInputStyle.Short,true,256)),
         new ActionRowBuilder().addComponents(f('ticket:embedcolor','Embed color','#5865F2',TextInputStyle.Short,true,7)),
-        new ActionRowBuilder().addComponents(f('ticket:description','Ticket description','Explain what this ticket is for...',TextInputStyle.Paragraph,true,1000)),
-        new ActionRowBuilder().addComponents(f('ticket:tag','Role/user to tag','@Tryout Staff or @username',TextInputStyle.Short,false,100))
+        new ActionRowBuilder().addComponents(f('ticket:description','Ticket description','Explain what this ticket is for...',TextInputStyle.Paragraph,true,1000))
       );
       return interaction.showModal(modal);
     }
@@ -844,7 +843,7 @@ client.on('interactionCreate', async (interaction) => {
       const name=interaction.fields.getTextInputValue('ticket:name').trim(), color=hex(interaction.fields.getTextInputValue('ticket:color'));
       const title=interaction.fields.getTextInputValue('ticket:embedname').trim(), embedColor=hex(interaction.fields.getTextInputValue('ticket:embedcolor'));
       const description=interaction.fields.getTextInputValue('ticket:description').trim();
-      const rawTag=interaction.fields.getTextInputValue('ticket:tag').trim();
+      const rawTag='';
       if(!name||color===null||!title||embedColor===null||!description) return interaction.reply({content:'❌ Use 6-digit hex colors like `#5865F2`.',ephemeral:true});
       config.name=name; config.color=color; config.title=title; config.description=description; config.embedColor=embedColor; config.categoryId=null; config.tagId=null; config.tagType=null;
       if(rawTag){
