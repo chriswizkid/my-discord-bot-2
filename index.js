@@ -36,11 +36,14 @@ const defaultData = {
   warnings: {},
   tickets: {},
   auditChannels: {},
+  ticketCategory: {},
 };
 let data = loadData();
 function loadData() {
-  try { return { ...defaultData, ...JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) }; }
-  catch { return structuredClone(defaultData); }
+  try {
+    const saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    return { ...defaultData, ...saved, ticketCategory: { ...(saved.ticketCategory || {}) } };
+  } catch { return structuredClone(defaultData); }
 }
 function saveData() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
@@ -208,7 +211,8 @@ function commandList(prefix) {
     [`${prefix}cs`, 'Clear deleted-message snipes.'],
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
-    [`${prefix}ticket <name> <color> "<title>" "<description>"`, 'Create a ticket panel; tickets are created in the panel channel’s category.'],
+    [`${prefix}ticketcategory #category`, 'Set the existing category where tickets will be created.'],
+    [`${prefix}ticket <name> <color> "<title>" "<description>"`, 'Create a ticket panel in the current channel; tickets are created in the configured category.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
@@ -241,7 +245,7 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('messageDelete', async (message) => {
-  if (!message.guild || message.author?.bot) return;
+  if (!message.guild || !message.author || message.author.bot) return;
   deletedSnipes.set(message.channel.id, {
     authorId: message.author.id,
     authorTag: message.author.tag,
@@ -656,13 +660,36 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // TICKET DESTINATION CATEGORY
+    if (cmd === 'ticketcategory' || cmd === 'tc') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) {
+        return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      }
+
+      const mentionedCategory = message.mentions.channels.first();
+      const requestedId = args.find(x => /^\\d{15,25}$/.test(x));
+      const category = mentionedCategory ||
+        (requestedId ? message.guild.channels.cache.get(requestedId) : null);
+
+      if (!category || category.type !== ChannelType.GuildCategory) {
+        return sendTemp(message.channel, `Usage: ${prefix}ticketcategory #existing-category`, 7000);
+      }
+
+      data.ticketCategory[message.guild.id] = category.id;
+      saveData();
+
+      await auditLog(message.guild, '🎟️ Ticket Category Updated', `${message.author} set the ticket destination category to **${category.name}**.`, 0x5865F2, [
+        { name: 'Category', value: `${category.name} (${category.id})` },
+      ]);
+
+      return sendTemp(message.channel, `✅ Ticket destination set to **${category.name}**. Run ${prefix}ticket in any channel to create the panel there.`, 7000);
+    }
+
     // TICKET PANEL CREATOR
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      // ?ticket/!ticket by itself creates the standard ticket panel.
-      // Optional arguments still let staff customize the panel.
       if (args.length === 0) {
-        args.push('ticket', '5865F2', 'Support Ticket', 'Select a ticket category below. Your ticket will be created inside the category you choose.');
+        args.push('ticket', '5865F2', 'Support Ticket', 'Open a ticket and a private ticket channel will be created in the configured ticket category.');
       } else if (args.length < 4) {
         return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> "<title>" "<description>" (or just ${prefix}ticket for the default panel)`, 7000);
       }
@@ -673,38 +700,41 @@ client.on('messageCreate', async (message) => {
       const title = args.shift();
       const description = args.join(' ').trim();
 
-      // Ticket destination is selected by the member from the server's EXISTING categories.
-      // The bot does not create or modify categories.
+      const categoryId = data.ticketCategory[message.guild.id];
+      const category = categoryId ? message.guild.channels.cache.get(categoryId) : null;
+      if (!category || category.type !== ChannelType.GuildCategory) {
+        return sendTemp(message.channel, `❌ No ticket category is configured. First run ${prefix}ticketcategory #existing-category`, 7000);
+      }
+
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id] = {
         name, color, title, description,
         guildId: message.guild.id,
         createdBy: message.author.id,
-        categoryId: null,
+        categoryId: category.id,
       };
       saveData();
-
-      const categorySelect = new ChannelSelectMenuBuilder()
-        .setCustomId(`ticket:category:${id}`)
-        .setPlaceholder('Select Ticket Category')
-        .setChannelTypes(ChannelType.GuildCategory)
-        .setMinValues(1)
-        .setMaxValues(1);
 
       const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(title)
         .setDescription(description)
-        .setFooter({ text: 'Choose an existing category below — the ticket will be created inside it.' });
+        .setFooter({ text: `Tickets will be created in: ${category.name}` });
+
+      const openButton = new ButtonBuilder()
+        .setCustomId(`ticket:create:${id}`)
+        .setLabel('Open Ticket')
+        .setEmoji('🎟️')
+        .setStyle(ButtonStyle.Primary);
 
       await message.channel.send({
         embeds: [embed],
-        components: [new ActionRowBuilder().addComponents(categorySelect)],
+        components: [new ActionRowBuilder().addComponents(openButton)],
       });
 
       await auditLog(message.guild, '🎟️ Ticket Panel Created', `${message.author} created a ticket panel in ${message.channel}.`, 0x5865F2, [
         { name: 'Panel Name', value: name },
-        { name: 'Ticket Destination', value: 'Selected from existing server categories' },
+        { name: 'Ticket Destination', value: `${category.name} (${category.id})` },
         { name: 'Title', value: title },
       ]);
       return sendTemp(message.channel, '✅ Ticket panel created.', 5000);
@@ -857,8 +887,7 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   const isOldButton = interaction.isButton() && interaction.customId.startsWith('ticket:create:');
-  const isCategorySelect = interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:category:');
-  if (!isOldButton && !isCategorySelect) return;
+  if (!isOldButton) return;
 
   const id = interaction.customId.split(':')[2];
   const config = data.tickets[id];
@@ -869,10 +898,7 @@ client.on('interactionCreate', async (interaction) => {
   const existing = interaction.guild.channels.cache.find(c => c.topic === `3C-TICKET:${interaction.user.id}`);
   if (existing) return interaction.reply({ content: `You already have a ticket: ${existing}`, ephemeral: true });
 
-  // New panels use the category selected from the Discord Channel Select menu.
-  // Old panels keep their saved categoryId for backwards compatibility.
-  const selectedCategoryId = isCategorySelect ? interaction.values[0] : config.categoryId;
-  const category = selectedCategoryId ? interaction.guild.channels.cache.get(selectedCategoryId) : null;
+  const category = config.categoryId ? interaction.guild.channels.cache.get(config.categoryId) : null;
   if (!category || category.type !== ChannelType.GuildCategory) {
     return interaction.reply({ content: '❌ Please select a valid existing ticket category.', ephemeral: true });
   }
