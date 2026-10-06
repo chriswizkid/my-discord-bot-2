@@ -659,7 +659,13 @@ client.on('messageCreate', async (message) => {
     // TICKET PANEL CREATOR
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      if (args.length < 4) return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> "<title>" "<description>"`, 7000);
+      // ?ticket/!ticket by itself creates the standard ticket panel.
+      // Optional arguments still let staff customize the panel.
+      if (args.length === 0) {
+        args.push('ticket', '5865F2', 'Support Ticket', 'Select a ticket category below. Your ticket will be created inside the category you choose.');
+      } else if (args.length < 4) {
+        return sendTemp(message.channel, `Usage: ${prefix}ticket <name> <color> "<title>" "<description>" (or just ${prefix}ticket for the default panel)`, 7000);
+      }
 
       const name = args.shift().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'ticket';
       const colorText = args.shift();
