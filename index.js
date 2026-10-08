@@ -256,9 +256,15 @@ async function recoverTicketPanels() {
   }
 
   // If a host/redeploy wiped data.json, recover already-posted public panels from Discord.
+  // Also recover a report-log channel by its fixed 3C-User-Report name.
   // Existing panel messages contain the stable ticket:create:<id> button. Existing ticket
   // channels let us recover the category, ticket-name base and access roles/users.
   for (const guild of client.guilds.cache.values()) {
+    if (!data.reportLogs?.[guild.id]) {
+      const reportChannel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === '3c-user-report');
+      if (reportChannel) data.reportLogs[guild.id] = reportChannel.id;
+    }
+
     const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.viewable);
     for (const channel of textChannels.values()) {
       const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
@@ -272,12 +278,32 @@ async function recoverTicketPanels() {
         const embed = msg.embeds?.[0];
         if (!embed) continue;
 
-        const existingTicket = guild.channels.cache.find(c =>
+        // Match an existing ticket to this panel by its actual ticket embed.
+        // This matters when a server has multiple ticket types/categories.
+        let existingTicket = null;
+        const possibleTickets = guild.channels.cache.filter(c =>
           c.type === ChannelType.GuildText &&
           typeof c.topic === 'string' &&
           c.topic.startsWith('3C-TICKET:') &&
           c.name.includes('-ticket-')
         );
+
+        for (const ticketChannel of possibleTickets.values()) {
+          const ticketMessages = await ticketChannel.messages.fetch({ limit: 15 }).catch(() => null);
+          if (!ticketMessages) continue;
+          const ticketEmbed = ticketMessages.find(m =>
+            m.author?.id === client.user.id &&
+            m.embeds?.[0] &&
+            (
+              (embed.title && m.embeds[0].footer?.text === embed.title) ||
+              (embed.description && m.embeds[0].description?.startsWith(embed.description))
+            )
+          );
+          if (ticketEmbed) {
+            existingTicket = ticketChannel;
+            break;
+          }
+        }
 
         let categoryId = existingTicket?.parentId || null;
         let recoveredName = null;
@@ -297,7 +323,6 @@ async function recoverTicketPanels() {
               if (overwriteId !== ownerId) recoveredTags.push({ id: overwriteId, type: 'user' });
             }
           }
-          const channelColor = existingTicket.messages ? null : null;
           if (embed.data?.color != null) recoveredColor = embed.data.color;
         }
 
