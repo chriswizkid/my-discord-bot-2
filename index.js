@@ -53,7 +53,7 @@ function saveData() {
 }
 
 const afk = new Map(); // guildId:userId -> { reason, since }
-const deletedSnipes = new Map(); // channelId -> message data
+const deletedSnipes = new Map(); // channelId -> array of deleted messages, newest first
 const editedSnipes = new Map(); // channelId -> message data
 const tempMuteTimers = new Map();
 const blehhhCooldowns = new Map();
@@ -248,13 +248,9 @@ client.on('messageCreate', async (message) => {
 
 client.on('messageDelete', async (message) => {
   if (!message.guild || !message.author || message.author.bot) return;
-  deletedSnipes.set(message.channel.id, {
-    authorId: message.author.id,
-    authorTag: message.author.tag,
-    content: message.content || '[no text]',
-    attachments: [...message.attachments.values()].map(a => a.url),
-    time: Date.now(),
-  });
+  const history = deletedSnipes.get(message.channel.id) || [];
+  history.unshift({ authorId: message.author.id, authorTag: message.author.tag, content: message.content || '[no text]', attachments: [...message.attachments.values()].map(a => a.url), time: Date.now() });
+  deletedSnipes.set(message.channel.id, history.slice(0, 50));
 });
 
 client.on('messageUpdate', async (oldMessage, newMessage) => {
@@ -333,6 +329,9 @@ client.on('messageCreate', async (message) => {
 
     if (!target) {
         return message.reply("Mention someone to kiss!");
+    }
+    if (target.id === message.author.id || target.bot) {
+        return message.reply("you cant kiss yourself/a bot u weirdo");
     }
 
     try {
@@ -493,7 +492,8 @@ client.on('messageCreate', async (message) => {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}mute @user <time> [reason]`, 5000);
       if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot mute that member because their highest role is equal to or higher than my bot role.', 5000);
-      const ms = parseTime(args[0]);
+      const durationArg = args.find(x => /^\d+(?:\.\d+)?(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/i.test(x));
+      const ms = parseTime(durationArg);
       if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Mute time must be between 1s and 28d, e.g. `10m`.', 5000);
       const reason = cleanReason(args.slice(1));
       await target.timeout(ms, reason || undefined);
@@ -635,8 +635,12 @@ client.on('messageCreate', async (message) => {
 
     // SNIPE
     if (cmd === 's' || cmd === 'snipe') {
-      const s = deletedSnipes.get(message.channel.id);
-      if (!s) return sendTemp(message.channel, 'Nothing to snipe in this channel.', 5000);
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission.', 5000);
+      const history = deletedSnipes.get(message.channel.id) || [];
+      const requested = Number(args[0]);
+      const index = Number.isInteger(requested) && requested > 0 ? requested - 1 : 0;
+      const s = history[index];
+      if (!s) return sendTemp(message.channel, `Nothing to snipe at #${requested || 1} in this channel.`, 5000);
       const e = new EmbedBuilder().setColor(0xED4245).setTitle('🗑️ Deleted message')
         .setAuthor({ name: s.authorTag })
         .setDescription(truncate(s.content, 4000))
@@ -645,6 +649,7 @@ client.on('messageCreate', async (message) => {
       return message.channel.send({ embeds: [e] });
     }
     if (cmd === 'cs') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission.', 5000);
       deletedSnipes.delete(message.channel.id);
       await message.react('✅').catch(() => {});
       return;
@@ -741,12 +746,12 @@ client.on('messageCreate', async (message) => {
     // UNBAN
     if (cmd === 'unban') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
-      const id = args[0]?.replace(/[<@!>]/g, '');
-      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban <user ID>`, 5000);
-      const user = await client.users.fetch(id).catch(() => null);
-      if (!user) return sendTemp(message.channel, '❌ I could not find that Discord user ID.', 5000);
-      await message.guild.members.unban(id);
-      return sendTemp(message.channel, `✅ Unbanned **${user.tag}**.`, 6000);
+      const id = message.mentions.users.first()?.id || args.find(x => /^\d{15,25}$/.test(x));
+      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban @user (or user ID)`, 5000);
+      const ban = await message.guild.bans.fetch(id).catch(() => null);
+      if (!ban) return sendTemp(message.channel, '❌ That member is not banned.', 5000);
+      await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
+      return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}**.`, 6000);
     }
 
     // PURGE USER
@@ -821,6 +826,21 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
+      const [,direction,currentRaw]=interaction.customId.split(':');
+      const current=Number(currentRaw)||0;
+      const pages=[
+        ['🛡️ 3C Moderation',['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
+        ['🧹 3C Management',['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server',['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other',['hug','kiss','slap','blehhh','unblehhh','afk','commands','help']]
+      ];
+      const next=Math.max(0,Math.min(pages.length-1,current+(direction==='next'?1:-1))),prefix=getPrefix(interaction.guildId),[title,keys]=pages[next];
+      const lines=keys.map(k=>{const f=commandList(prefix).find(([a])=>a.includes(k));return f?`**${f[0]}** — ${f[1]}`:`**${prefix}${k}**`;});
+      const e=new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(lines.join('\\n')).setFooter({text:`Page ${next+1}/${pages.length} • Prefix: ${prefix}`});
+      const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`commands:prev:${next}`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(next===0),new ButtonBuilder().setCustomId(`commands:next:${next}`).setLabel('▶️').setStyle(ButtonStyle.Primary).setDisabled(next===pages.length-1));
+      return interaction.update({embeds:[e],components:[row]});
+    }
     if (interaction.isButton() && interaction.customId.startsWith('ticket:setupopen:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
