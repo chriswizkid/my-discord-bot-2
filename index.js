@@ -230,7 +230,7 @@ function commandList(prefix) {
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
     [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
-    [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 10-minute cooldown per reporter.'],
+    [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
     [`${prefix}setupreportlog #channel`, 'Connect the 3C User Report log to an existing channel.'],
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
@@ -523,6 +523,7 @@ client.on('messageCreate', async (message) => {
     // WHISPER — Discord prefix commands cannot create an ephemeral message for another member,
     // so this sends the whisper privately to the target's DMs.
     if (cmd === 'whisper' || cmd === 'w') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission to use whisper.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}whisper @user <message>`, 5000);
       if (target.id === message.author.id || target.user.bot) return sendTemp(message.channel, '❌ You cannot whisper to yourself or a bot.', 5000);
       const rawWhisper = message.content.slice(prefix.length + cmd.length).trim();
@@ -1013,7 +1014,7 @@ client.on('messageCreate', async (message) => {
         return sendTemp(message.channel, '❌ I could not submit the report right now.', 6000);
       }
 
-      const until = now + (10 * 60 * 1000);
+      const until = now + (7 * 60 * 1000);
       reportCooldowns.set(cooldownKey, until);
       data.reportCooldowns[cooldownKey] = until;
       saveData();
