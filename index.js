@@ -361,9 +361,10 @@ client.on('messageCreate', async (message) => {
         return sendTemp(message.channel, '❌ Members with the **Blehhh** role cannot use this command.', 6000);
       }
 
+      const freshInvoker = await message.guild.members.fetch(message.author.id).catch(() => message.member);
       const hasBoosterRole =
-        message.member.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
-        message.member.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
+        freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
+        freshInvoker.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
 
       if (!hasBoosterRole) {
         return sendTemp(message.channel, '❌ Only server boosters or members with the **booster toooo** role can use this command.', 6000);
@@ -429,7 +430,8 @@ client.on('messageCreate', async (message) => {
 
     // UNBLEHHH
     if (cmd === 'unblehhh') {
-      const allowed = message.member.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) || message.member.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
+      const freshInvoker = await message.guild.members.fetch(message.author.id).catch(() => message.member);
+      const allowed = freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) || freshInvoker.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
       if (!allowed) return sendTemp(message.channel, '❌ Only Server Boosters or Boost toooo can use this command.', 6000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}unblehhh @user`, 6000);
       const role = message.guild.roles.cache.get(BLEHHH_ROLE_ID);
@@ -760,7 +762,7 @@ client.on('messageCreate', async (message) => {
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}pus @user <amount>`, 5000);
       const amount = Number(removeMentionArgs(args)[0]);
       if (!Number.isInteger(amount) || amount < 1 || amount > 100) return sendTemp(message.channel, `Usage: ${prefix}pus @user <1-100>`, 5000);
-      const fetched = await message.channel.messages.fetch({ limit: Math.min(100, amount + 10) });
+      const fetched = await message.channel.messages.fetch({ limit: 100 });
       const matches = fetched.filter(m => m.author.id === target.id).first(amount);
       let deleted = 0;
       const recent = matches.filter(m => Date.now() - m.createdTimestamp < 14 * 86400000);
