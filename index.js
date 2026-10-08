@@ -40,6 +40,8 @@ const defaultData = {
   warnings: {},
   tickets: {},
   auditChannels: {},
+  reportLogs: {},
+  reportCooldowns: {},
 };
 let data = loadData();
 function loadData() {
@@ -58,6 +60,7 @@ const editedSnipes = new Map(); // channelId -> message data
 const tempMuteTimers = new Map();
 const blehhhCooldowns = new Map();
 const blehhhTimers = new Map();
+const reportCooldowns = new Map();
 const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
 const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
 const BLEHHH_ROLE_ID = '1555571971801088031';
@@ -183,14 +186,19 @@ function normalizeRoleName(text) {
 
 function findRole(guild, text) {
   const rawWanted = String(text || '').trim();
+  const mentionMatch = rawWanted.match(/^<@&(\d+)>$/);
+  const idMatch = rawWanted.match(/^\d{15,25}$/);
+  if (mentionMatch) return guild.roles.cache.get(mentionMatch[1]) || null;
+  if (idMatch) return guild.roles.cache.get(idMatch[0]) || null;
+
   const wanted = normalizeRoleName(rawWanted);
   if (!wanted) return null;
 
-  // First try the exact role name, then the normalized name. This means
-  // users can type either the real emoji/decorated role name OR just its text.
+  // Exact first, then normalized, then partial normalized matching.
   return guild.roles.cache.find(r => r.name.trim().toLowerCase() === rawWanted.toLowerCase()) ||
          guild.roles.cache.find(r => normalizeRoleName(r.name) === wanted) ||
-         guild.roles.cache.find(r => normalizeRoleName(r.name).includes(wanted));
+         guild.roles.cache.find(r => normalizeRoleName(r.name).includes(wanted)) ||
+         guild.roles.cache.find(r => wanted.includes(normalizeRoleName(r.name)));
 }
 
 function commandList(prefix) {
@@ -222,9 +230,13 @@ function commandList(prefix) {
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
     [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
+    [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 10-minute cooldown per reporter.'],
+    [`${prefix}setupreportlog #channel`, 'Connect the 3C User Report log to an existing channel.'],
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
+    [`${prefix}ship @user @user`, 'Give two members a random compatibility score and GIF.'],
+    [`${prefix}whisper/ w @user <message>`, 'Send a private whisper to a member by DM.'],
     [`${prefix}blehhh @user <10s-30m>`, 'Give a member the Blehhh role for a temporary duration (boosters only).'],
     [`${prefix}unblehhh @user`, 'Remove the Blehhh role immediately (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
@@ -233,8 +245,99 @@ function commandList(prefix) {
   ];
 }
 
-client.once('ready', () => {
+async function recoverTicketPanels() {
+  // Persisted configs are preferred. This also validates their saved panel messages.
+  for (const [id, config] of Object.entries(data.tickets || {})) {
+    if (!config?.guildId) continue;
+    const guild = client.guilds.cache.get(config.guildId);
+    if (!guild) continue;
+    if (!config.tagIds) config.tagIds = config.tagId ? [config.tagId] : [];
+    if (!config.tagTypes) config.tagTypes = config.tagType ? [config.tagType] : [];
+  }
+
+  // If a host/redeploy wiped data.json, recover already-posted public panels from Discord.
+  // Existing panel messages contain the stable ticket:create:<id> button. Existing ticket
+  // channels let us recover the category, ticket-name base and access roles/users.
+  for (const guild of client.guilds.cache.values()) {
+    const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.viewable);
+    for (const channel of textChannels.values()) {
+      const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+      if (!messages) continue;
+      for (const msg of messages.values()) {
+        const button = msg.components?.flatMap(row => row.components || []).find(comp => comp.customId?.startsWith('ticket:create:'));
+        if (!button) continue;
+        const id = button.customId.split(':')[2];
+        if (data.tickets[id]?.categoryId) continue;
+
+        const embed = msg.embeds?.[0];
+        if (!embed) continue;
+
+        const existingTicket = guild.channels.cache.find(c =>
+          c.type === ChannelType.GuildText &&
+          typeof c.topic === 'string' &&
+          c.topic.startsWith('3C-TICKET:') &&
+          c.name.includes('-ticket-')
+        );
+
+        let categoryId = existingTicket?.parentId || null;
+        let recoveredName = null;
+        let recoveredColor = 0x5865F2;
+        let recoveredTags = [];
+
+        if (existingTicket) {
+          const marker = existingTicket.name.indexOf('-ticket-');
+          if (marker > 0) recoveredName = existingTicket.name.slice(0, marker).replace(/-/g, ' ');
+          const everyoneId = guild.roles.everyone.id;
+          const meId = client.user.id;
+          for (const [overwriteId, overwrite] of existingTicket.permissionOverwrites.cache) {
+            if (overwriteId === everyoneId || overwriteId === meId) continue;
+            if (overwrite.type === OverwriteType.Role) recoveredTags.push({ id: overwriteId, type: 'role' });
+            if (overwrite.type === OverwriteType.Member) {
+              const ownerId = existingTicket.topic.slice('3C-TICKET:'.length);
+              if (overwriteId !== ownerId) recoveredTags.push({ id: overwriteId, type: 'user' });
+            }
+          }
+          const channelColor = existingTicket.messages ? null : null;
+          if (embed.data?.color != null) recoveredColor = embed.data.color;
+        }
+
+        if (!data.tickets[id]) {
+          data.tickets[id] = {
+            guildId: guild.id,
+            createdBy: msg.author?.id || guild.ownerId,
+            panelChannelId: channel.id,
+            panelMessageId: msg.id,
+            categoryId,
+            name: recoveredName || (embed.title ? embed.title.replace(/^🎟️\s*/,'') : 'ticket'),
+            color: recoveredColor,
+            title: embed.title || 'Create Ticket',
+            description: embed.description || 'Open a ticket and a staff member will help you.',
+            embedColor: embed.data?.color ?? 0x5865F2,
+            tagId: recoveredTags[0]?.id || null,
+            tagType: recoveredTags[0]?.type || null,
+            tagIds: recoveredTags.map(t => t.id),
+            tagTypes: recoveredTags.map(t => t.type),
+          };
+        } else {
+          data.tickets[id].panelChannelId = channel.id;
+          data.tickets[id].panelMessageId = msg.id;
+          if (!data.tickets[id].categoryId && categoryId) data.tickets[id].categoryId = categoryId;
+          if ((!data.tickets[id].tagIds || !data.tickets[id].tagIds.length) && recoveredTags.length) {
+            data.tickets[id].tagIds = recoveredTags.map(t => t.id);
+            data.tickets[id].tagTypes = recoveredTags.map(t => t.type);
+            data.tickets[id].tagId = recoveredTags[0].id;
+            data.tickets[id].tagType = recoveredTags[0].type;
+          }
+        }
+      }
+    }
+  }
+  saveData();
+}
+
+client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
 });
 
@@ -355,6 +458,64 @@ client.on('messageCreate', async (message) => {
         await message.reply("Couldn't get a GIF right now 😭");
     }
 }
+    // SHIP
+    if (cmd === 'ship') {
+      const users = [...message.mentions.users.values()].filter(u => !u.bot);
+      if (users.length < 2) return sendTemp(message.channel, `Usage: ${prefix}ship @user @user`, 5000);
+
+      const first = users[0];
+      const second = users[1];
+      const score = Math.floor(Math.random() * 101);
+      let verdict = score >= 90 ? '💞 Perfect match' :
+        score >= 75 ? '❤️ Pretty strong' :
+        score >= 50 ? '💗 There might be something here' :
+        score >= 25 ? '💀 The math is struggling' :
+        '😭 Absolutely not';
+
+      try {
+        const response = await fetch('https://api.otakugifs.xyz/gif?reaction=kiss');
+        if (!response.ok) throw new Error(`GIF API returned ${response.status}`);
+        const gif = await response.json();
+        const embed = new EmbedBuilder()
+          .setColor(0xFF66B3)
+          .setTitle('💘 3C Ship Meter')
+          .setDescription(`${first} + ${second}\n\n**Compatibility: ${score}%**\n${verdict}`)
+          .setTimestamp();
+        if (gif?.url) embed.setImage(gif.url);
+        return message.channel.send({ embeds: [embed] });
+      } catch (error) {
+        console.error('Ship GIF Error:', error);
+        return message.channel.send({
+          embeds: [new EmbedBuilder()
+            .setColor(0xFF66B3)
+            .setTitle('💘 3C Ship Meter')
+            .setDescription(`${first} + ${second}\n\n**Compatibility: ${score}%**\n${verdict}`)
+            .setTimestamp()]
+        });
+      }
+    }
+
+    // WHISPER — Discord prefix commands cannot create an ephemeral message for another member,
+    // so this sends the whisper privately to the target's DMs.
+    if (cmd === 'whisper' || cmd === 'w') {
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}whisper @user <message>`, 5000);
+      if (target.id === message.author.id || target.user.bot) return sendTemp(message.channel, '❌ You cannot whisper to yourself or a bot.', 5000);
+      const rawWhisper = message.content.slice(prefix.length + cmd.length).trim();
+      const mentionText = message.mentions.users.first()?.toString() || '';
+      const whisperText = rawWhisper.replace(mentionText, '').trim();
+      if (!whisperText) return sendTemp(message.channel, `Usage: ${prefix}whisper @user <message>`, 5000);
+      if (whisperText.length > 1900) return sendTemp(message.channel, '❌ Whisper is too long.', 5000);
+
+      try {
+        await target.user.send(`🤫 **Whisper from ${message.author.tag}:**\n${whisperText}`);
+      } catch {
+        return sendTemp(message.channel, '❌ I could not DM that member. Their DMs may be closed.', 6000);
+      }
+
+      await safeDelete(message);
+      return message.channel.send('🤫 whisper sent').then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+    }
+
     // BLEHHH
     if (cmd === 'blehhh') {
       if (message.member.roles.cache.has(BLEHHH_ROLE_ID)) {
@@ -562,9 +723,18 @@ client.on('messageCreate', async (message) => {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageRoles)) return sendTemp(message.channel, '❌ You need **Manage Roles** permission.', 5000);
       const action = (args.shift() || '').toLowerCase();
       if (!['add','give','remove'].includes(action) || !target) return sendTemp(message.channel, `Usage: ${prefix}role add|give|remove @user <role>`, 5000);
-      const role = findRole(message.guild, removeMentionArgs(args).join(' '));
-      if (!role) return sendTemp(message.channel, '❌ I could not find that role. Type the role name normally; no special formatting is needed.', 5000);
-      if (role.managed || role.position >= message.guild.members.me.roles.highest.position) return sendTemp(message.channel, '❌ I cannot manage that role. Move my bot role above it.', 5000);
+      const roleText = removeMentionArgs(args).join(' ').trim();
+      const role = findRole(message.guild, roleText);
+      if (!role) return sendTemp(message.channel, '❌ I could not find that role. You can use the role name, role mention, or role ID.', 5000);
+      const me = await message.guild.members.fetchMe().catch(() => message.guild.members.me);
+      if (!me) return sendTemp(message.channel, '❌ I could not check my bot role hierarchy.', 5000);
+      if (role.managed || role.id === message.guild.id || role.position >= me.roles.highest.position) {
+        return sendTemp(message.channel, '❌ I cannot manage that role. Move my bot role above it.', 5000);
+      }
+      if (target.id === message.guild.ownerId) return sendTemp(message.channel, '❌ I cannot change roles on the server owner.', 5000);
+      if (target.id !== message.author.id && target.roles.highest.position >= me.roles.highest.position) {
+        return sendTemp(message.channel, '❌ I cannot change roles for a member whose highest role is equal to or above my bot role.', 5000);
+      }
       try {
         if (action === 'remove') await target.roles.remove(role);
         else await target.roles.add(role);
@@ -673,11 +843,14 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null };
+      data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null, tagIds: [], tagTypes: [] };
       saveData();
       const b = new ButtonBuilder().setCustomId(`ticket:setupopen:${id}`).setLabel('Set Up Ticket Panel').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
       await safeDelete(message);
-      return message.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🎟️ Ticket Panel Setup').setDescription('Click the button below to open the ticket setup form.')], components: [new ActionRowBuilder().addComponents(b)] });
+      const setupMessage = await message.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🎟️ Ticket Panel Setup').setDescription('Click the button below to open the ticket setup form.')], components: [new ActionRowBuilder().addComponents(b)] });
+      data.tickets[id].setupMessageId = setupMessage.id;
+      saveData();
+      return setupMessage;
     }
     // CLOSE TICKET
     if (cmd === 'closeticket' || cmd === 'ct') {
@@ -769,6 +942,102 @@ client.on('messageCreate', async (message) => {
       if (recent.size) deleted += (await message.channel.bulkDelete(recent, true)).size;
       for (const m of matches.filter(m => !recent.has(m.id)).values()) { await m.delete().then(() => deleted++).catch(() => {}); }
       return sendTemp(message.channel, `🧹 Deleted **${deleted}** messages from **${target.user.tag}**.`, 6000);
+    }
+
+    // USER REPORTS
+    if (cmd === 'report') {
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}report @user <reason>`, 5000);
+      if (target.id === message.author.id || target.user.bot) {
+        return sendTemp(message.channel, '❌ You cannot report yourself or a bot.', 5000);
+      }
+
+      const reason = cleanReason(removeMentionArgs(args));
+      if (!reason) return sendTemp(message.channel, `Usage: ${prefix}report @user <reason>`, 5000);
+      if (reason.length > 1000) return sendTemp(message.channel, '❌ Your report reason is too long.', 5000);
+
+      const cooldownKey = key(message.guild.id, message.author.id);
+      const now = Date.now();
+      const savedUntil = Number(data.reportCooldowns?.[cooldownKey] || 0);
+      const memoryUntil = reportCooldowns.get(cooldownKey) || 0;
+      const cooldownUntil = Math.max(savedUntil, memoryUntil);
+      if (cooldownUntil > now) {
+        return sendTemp(message.channel, `⏳ You can submit another report in **${prettyDuration(cooldownUntil - now)}**.`, 6000);
+      }
+
+      const reportChannelId = data.reportLogs?.[message.guild.id];
+      const reportChannel = reportChannelId ? message.guild.channels.cache.get(reportChannelId) : null;
+      if (!reportChannel || !reportChannel.isTextBased()) {
+        return sendTemp(message.channel, `❌ Report logging is not set up. An admin should run ${prefix}setupreportlog #channel.`, 7000);
+      }
+
+      const reportEmbed = new EmbedBuilder()
+        .setColor(0xED4245)
+        .setTitle('🚨 3C User Report')
+        .addFields(
+          { name: 'Reported By', value: `${message.author} (${message.author.tag})`, inline: true },
+          { name: 'Reported Member', value: `${target} (${target.user.tag})`, inline: true },
+          { name: 'Reason', value: truncate(reason, 1000), inline: false },
+          { name: 'Channel', value: `${message.channel} (${message.channel.id})`, inline: false },
+        )
+        .setTimestamp();
+
+      try {
+        await reportChannel.send({ embeds: [reportEmbed] });
+      } catch (err) {
+        console.error('Report log error:', err);
+        return sendTemp(message.channel, '❌ I could not submit the report right now.', 6000);
+      }
+
+      const until = now + (10 * 60 * 1000);
+      reportCooldowns.set(cooldownKey, until);
+      data.reportCooldowns[cooldownKey] = until;
+      saveData();
+      await safeDelete(message);
+      return message.channel.send('report successfully submitted').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+    }
+
+    // REPORT LOG SETUP — connect to an existing channel, or create 3C-User-Report when no channel is supplied.
+    if (cmd === 'setupreportlog') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.Administrator)) {
+        return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupreportlog.`, 5000);
+      }
+
+      const mentionedChannel = message.mentions.channels.first();
+      const requestedId = args.find(x => /^\\d{15,25}$/.test(x));
+      let reportChannel = mentionedChannel ||
+        (requestedId ? message.guild.channels.cache.get(requestedId) : null);
+
+      if (!reportChannel) {
+        reportChannel = await message.guild.channels.create({
+          name: '3C-User-Report',
+          type: ChannelType.GuildText,
+          reason: '3C user report log setup',
+        }).catch(() => null);
+      }
+
+      if (!reportChannel || !reportChannel.isTextBased() || reportChannel.guildId !== message.guild.id) {
+        return sendTemp(message.channel, `❌ Use ${prefix}setupreportlog #channel, or give me permission to create **3C-User-Report**.`, 7000);
+      }
+
+      const me = message.guild.members.me;
+      const canWrite = me && reportChannel.permissionsFor(me).has([
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.EmbedLinks,
+      ]);
+      if (!canWrite) return sendTemp(message.channel, '❌ I cannot write in that report channel. Give the bot View Channel, Send Messages and Embed Links.', 7000);
+
+      data.reportLogs[message.guild.id] = reportChannel.id;
+      saveData();
+      await reportChannel.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0xED4245)
+          .setTitle('🚨 3C User Report Log Connected')
+          .setDescription('User reports will be logged here with the reporter, reported member and reason.')
+          .addFields({ name: 'Channel', value: String(reportChannel) })
+          .setTimestamp()]
+      }).catch(() => {});
+      return sendTemp(message.channel, `✅ 3C User Reports are now connected to ${reportChannel}.`, 6000);
     }
 
     // AUDIT LOG SETUP — connect to an EXISTING channel; never create one.
@@ -950,7 +1219,10 @@ client.on('interactionCreate', async (interaction) => {
       if(!config.tagId||!config.tagType) return interaction.update({content:'✅ Category saved! Now select the Role/User to Tag.',embeds:[],components:interaction.message.components});
       const open=new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Open Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
       const embed=new EmbedBuilder().setColor(config.embedColor).setTitle(config.title).setDescription(config.description);
-      await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
+      const panelMessage=await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
+      config.panelChannelId=interaction.channel.id;
+      config.panelMessageId=panelMessage.id;
+      saveData();
       await interaction.update({content:'✅ Ticket panel created! The panel is now visible to everyone in this channel.',embeds:[],components:[]});
       return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category.`,0x5865F2);
     }
@@ -961,6 +1233,8 @@ client.on('interactionCreate', async (interaction) => {
       const existing=interaction.guild.channels.cache.find(c=>c.topic===`3C-TICKET:${interaction.user.id}`);
       if(existing) return interaction.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
       const category=interaction.guild.channels.cache.get(config.categoryId);
+      if (!config.tagIds) config.tagIds = config.tagId ? [config.tagId] : [];
+      if (!config.tagTypes) config.tagTypes = config.tagType ? [config.tagType] : [];
       if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ This panel has no valid ticket category.',ephemeral:true});
       const safeBase=String(config.name||'ticket').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60)||'ticket';
       const safeUser=String(interaction.user.username||interaction.user.id).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,25)||interaction.user.id;
