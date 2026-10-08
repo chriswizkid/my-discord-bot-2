@@ -1028,7 +1028,7 @@ client.on('messageCreate', async (message) => {
       }
 
       const mentionedChannel = message.mentions.channels.first();
-      const requestedId = args.find(x => /^\\d{15,25}$/.test(x));
+      const requestedId = args.find(x => /^\d{15,25}$/.test(x));
       let reportChannel = mentionedChannel ||
         (requestedId ? message.guild.channels.cache.get(requestedId) : null);
 
