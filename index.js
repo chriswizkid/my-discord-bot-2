@@ -480,7 +480,12 @@ client.on('messageCreate', async (message) => {
     }
 }
     // SHIP
-    if (cmd === 'ship') {
+    if (cmd === 'coinflip') {
+    const result = Math.random() < 0.5 ? 'Heads 🪙' : 'Tails 🪙';
+    return message.channel.send('🪙 **Coinflip:** ' + result);
+  }
+
+  if (cmd === 'ship') {
       const users = [...message.mentions.users.values()].filter(u => !u.bot);
       if (users.length < 2) return sendTemp(message.channel, `Usage: ${prefix}ship @user @user`, 5000);
 
