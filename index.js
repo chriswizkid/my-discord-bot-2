@@ -458,10 +458,6 @@ client.on('messageCreate', async (message) => {
     if (!target) {
         return message.reply("Mention someone to kiss!");
     }
-    if (target.id === message.author.id || target.bot) {
-        return message.reply("you cant kiss yourself/a bot u weirdo");
-    }
-
     try {
         const response = await fetch(
             "https://api.otakugifs.xyz/gif?reaction=kiss"
