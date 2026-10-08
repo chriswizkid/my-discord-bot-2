@@ -221,7 +221,7 @@ function commandList(prefix) {
     [`${prefix}kick @user [reason]`, 'Kick a member and DM the kick card.'],
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
-    [`${prefix}pus @user <amount>`, 'Delete recent messages from one member.'],
+    [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
@@ -809,9 +809,30 @@ client.on('messageCreate', async (message) => {
     }
     // HELP / COMMANDS
     if (cmd === 'commands') {
-      const lines = commandList(prefix).map(([a,b]) => `**${a}** — ${b}`);
-      const e = new EmbedBuilder().setColor(0x5865F2).setTitle('3C Commands').setDescription(lines.join('\n')).setFooter({ text: `Prefix: ${prefix}` });
-      return message.channel.send({ embeds: [e] });
+      const pages = [
+        ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
+        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
+      ];
+      const [title, keys] = pages[0];
+      const lines = keys.map(k => {
+        const f = commandList(prefix).find(([a]) => a.includes(k));
+        return f ? `**${f[0]}** — ${f[1]}` : `**${prefix}${k}**`;
+      });
+      const e = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(title)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `Page 1/${pages.length} • Prefix: ${prefix}` });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('commands:prev:0').setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId('commands:home:0').setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('commands:next:0').setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary)
+      );
+
+      return message.channel.send({ embeds: [e], components: [row] });
     }
     if (cmd === 'help') {
       const wanted = (args[0] || '').toLowerCase().replace(prefix, '');
@@ -829,20 +850,42 @@ client.on('messageCreate', async (message) => {
 client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
-      const [,direction,currentRaw]=interaction.customId.split(':');
-      const current=Number(currentRaw)||0;
-      const pages=[
-        ['🛡️ 3C Moderation',['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management',['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-        ['🎟️ 3C Tickets & Server',['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
-        ['😛 3C Fun & Other',['hug','kiss','slap','blehhh','unblehhh','afk','commands','help']]
+      const [, action, currentRaw] = interaction.customId.split(':');
+      const current = Number(currentRaw) || 0;
+      const pages = [
+        ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
+        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
       ];
-      const next=Math.max(0,Math.min(pages.length-1,current+(direction==='next'?1:-1))),prefix=getPrefix(interaction.guildId),[title,keys]=pages[next];
-      const lines=keys.map(k=>{const f=commandList(prefix).find(([a])=>a.includes(k));return f?`**${f[0]}** — ${f[1]}`:`**${prefix}${k}**`;});
-      const e=new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(lines.join('\\n')).setFooter({text:`Page ${next+1}/${pages.length} • Prefix: ${prefix}`});
-      const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`commands:prev:${next}`).setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(next===0),new ButtonBuilder().setCustomId(`commands:next:${next}`).setLabel('▶️').setStyle(ButtonStyle.Primary).setDisabled(next===pages.length-1));
-      return interaction.update({embeds:[e],components:[row]});
+
+      let next = current;
+      if (action === 'next') next = Math.min(pages.length - 1, current + 1);
+      if (action === 'prev') next = Math.max(0, current - 1);
+      if (action === 'home') next = 0;
+
+      const prefix = getPrefix(interaction.guildId);
+      const [title, keys] = pages[next];
+      const lines = keys.map(k => {
+        const f = commandList(prefix).find(([a]) => a.includes(k));
+        return f ? `**${f[0]}** — ${f[1]}` : `**${prefix}${k}**`;
+      });
+
+      const e = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(title)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: `Page ${next + 1}/${pages.length} • Prefix: ${prefix}` });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`commands:prev:${next}`).setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(next === 0),
+        new ButtonBuilder().setCustomId(`commands:home:${next}`).setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`commands:next:${next}`).setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(next === pages.length - 1)
+      );
+
+      return interaction.update({ embeds: [e], components: [row] });
     }
+
     if (interaction.isButton() && interaction.customId.startsWith('ticket:setupopen:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
