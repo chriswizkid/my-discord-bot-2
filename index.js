@@ -63,18 +63,11 @@ function saveData() {
   }
 }
 
+const STAFF_ROLE_ID = '1514317861706006598';
+
 function isStaffMember(member) {
-  if (!member?.permissions) return false;
-  const staffPermissions = [
-    PermissionsBitField.Flags.Administrator,
-    PermissionsBitField.Flags.ManageGuild,
-    PermissionsBitField.Flags.ModerateMembers,
-    PermissionsBitField.Flags.KickMembers,
-    PermissionsBitField.Flags.BanMembers,
-    PermissionsBitField.Flags.ManageMessages,
-    PermissionsBitField.Flags.ManageChannels,
-  ];
-  return staffPermissions.some(permission => member.permissions.has(permission));
+  if (!member) return false;
+  return member.roles?.cache?.has(STAFF_ROLE_ID) || false;
 }
 
 function staffStatsFor(guildId, userId) {
