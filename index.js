@@ -478,11 +478,13 @@ client.on('messageCreate', async (message) => {
     const activity = staffStatsFor(message.guild.id, message.author.id);
     activity.messages = (activity.messages || 0) + 1;
     activity.lastSeen = Date.now();
-    if (message.content.startsWith(getPrefix(message.guild.id))) {
+    const isBotCommand = message.content.startsWith(getPrefix(message.guild.id));
+    if (isBotCommand) {
       activity.commands = (activity.commands || 0) + 1;
       activity.lastCommand = Date.now();
     }
-    saveData();
+    // Keep writes modest: persist every 10th staff message and every command.
+    if (isBotCommand || activity.messages % 10 === 0) saveData();
   }
   const prefix = getPrefix(message.guild.id);
 
@@ -1435,10 +1437,12 @@ client.on('interactionCreate', async (interaction) => {
       const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
       if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ You cannot close this ticket.',ephemeral:true});
       const reason=interaction.fields.getTextInputValue('ticket:closereason').trim(), ticket=interaction.channel, category=ticket.parent;
-      const closerStats = staffStatsFor(interaction.guild.id, interaction.user.id);
-      closerStats.ticketsClosed = (closerStats.ticketsClosed || 0) + 1;
-      closerStats.lastSeen = Date.now();
-      saveData();
+      if (staff) {
+        const closerStats = staffStatsFor(interaction.guild.id, interaction.user.id);
+        closerStats.ticketsClosed = (closerStats.ticketsClosed || 0) + 1;
+        closerStats.lastSeen = Date.now();
+        saveData();
+      }
       await auditLog(interaction.guild,'🔒 Ticket Closed',`${ticket} was closed by ${interaction.user}.`,0xED4245,[{name:'Closed By',value:`${interaction.user.tag} (${interaction.user.id})`},{name:'Ticket Creator',value:`<@${ownerId}> (${ownerId})`},{name:'Channel',value:`#${ticket.name} (${ticket.id})`},{name:'Category',value:category?`${category.name} (${category.id})`:'Unknown'},{name:'Close Reason',value:truncate(reason||'No reason provided')}]);
       await interaction.reply({content:`🔒 Ticket closed. Reason: **${reason}**`});
       setTimeout(()=>ticket.delete(`Ticket closed by ${interaction.user.tag}: ${reason}`.slice(0,512)).catch(()=>{}),1200);
