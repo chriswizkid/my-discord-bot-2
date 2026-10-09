@@ -270,6 +270,7 @@ function commandList(prefix) {
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
     [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
     [`${prefix}serverinfo`, 'Show server statistics and icon.'],
+    [`${prefix}checkuser @user`, 'Show a member profile or staff activity/moderation dashboard. Staff only.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
     [`${prefix}slowmode <time|off>`, 'Set channel slowmode or turn it off, e.g. 10s, 5m, 1h, off.'],
@@ -733,7 +734,11 @@ client.on('messageCreate', async (message) => {
       const cases = Array.isArray(data.staffCases[message.guild.id]) ? data.staffCases[message.guild.id] : [];
       const issued = cases.filter(item => item.moderatorId === targetUser.id);
       const received = cases.filter(item => item.targetId === targetUser.id);
-      const count = action => issued.filter(item => item.action === action).length;
+      const legacyWarningsIssued = Object.entries(data.warnings || {})
+        .filter(([warningKey]) => warningKey.startsWith(`${message.guild.id}:`))
+        .flatMap(([, items]) => Array.isArray(items) ? items : [])
+        .filter(item => item.moderatorId === targetUser.id).length;
+      const count = action => action === 'warn' ? legacyWarningsIssued : issued.filter(item => item.action === action).length;
       const recentIssued = issued.slice(-8).reverse().map(item => `• **${item.action.toUpperCase()}** <@${item.targetId || targetUser.id}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
       const recentReceived = received.slice(-6).reverse().map(item => `• **${item.action.toUpperCase()}** by <@${item.moderatorId}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
       const roles = targetMember ? targetMember.roles.cache.filter(role => role.id !== message.guild.id).map(role => role.toString()).slice(0, 15).join(', ') : 'Not currently in this server';
