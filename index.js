@@ -14,6 +14,7 @@ const {
   TextInputStyle,
   ChannelType,
   OverwriteType,
+  AuditLogEvent,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -26,6 +27,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -34,7 +36,7 @@ const client = new Client({
 
 // Small JSON database. Good for testing. For a Render production bot,
 // move this to MongoDB/Postgres or a persistent Render disk so it survives restarts.
-const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
 const defaultData = {
   prefixes: {},
   warnings: {},
@@ -42,6 +44,8 @@ const defaultData = {
   auditChannels: {},
   reportLogs: {},
   reportCooldowns: {},
+  staffStats: {},
+  staffCases: {},
 };
 let data = loadData();
 function loadData() {
@@ -51,7 +55,61 @@ function loadData() {
   } catch { return structuredClone(defaultData); }
 }
 function saveData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  try {
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error('Could not save bot data. Check DATA_FILE and persistent storage settings:', error);
+  }
+}
+
+function isStaffMember(member) {
+  if (!member?.permissions) return false;
+  const staffPermissions = [
+    PermissionsBitField.Flags.Administrator,
+    PermissionsBitField.Flags.ManageGuild,
+    PermissionsBitField.Flags.ModerateMembers,
+    PermissionsBitField.Flags.KickMembers,
+    PermissionsBitField.Flags.BanMembers,
+    PermissionsBitField.Flags.ManageMessages,
+    PermissionsBitField.Flags.ManageChannels,
+  ];
+  return staffPermissions.some(permission => member.permissions.has(permission));
+}
+
+function staffStatsFor(guildId, userId) {
+  const k = key(guildId, userId);
+  if (!data.staffStats[k]) data.staffStats[k] = {
+    actions: {}, commands: 0, messages: 0, ticketsClaimed: 0, ticketsClosed: 0,
+    lastSeen: 0, lastCommand: 0,
+  };
+  const stats = data.staffStats[k];
+  if (!stats.actions) stats.actions = {};
+  return stats;
+}
+
+const recentStaffActionKeys = new Map();
+function recordStaffAction(guildId, moderatorId, action, targetId, reason = '', source = '3c') {
+  if (!guildId || !moderatorId || !action) return false;
+  const now = Date.now();
+  const dedupeKey = `${guildId}:${moderatorId}:${action}:${targetId || 'none'}`;
+  const last = recentStaffActionKeys.get(dedupeKey) || 0;
+  if (now - last < 10000) return false;
+  recentStaffActionKeys.set(dedupeKey, now);
+  const stats = staffStatsFor(guildId, moderatorId);
+  stats.actions[action] = (stats.actions[action] || 0) + 1;
+  stats.lastSeen = now;
+  if (['warn', 'kick', 'ban', 'timeout', 'untimeout', 'unban'].includes(action)) {
+    if (!Array.isArray(data.staffCases[guildId])) data.staffCases[guildId] = [];
+    data.staffCases[guildId].push({
+      id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      guildId, moderatorId, action, targetId: targetId || null,
+      reason: String(reason || '').slice(0, 1000), at: now, source,
+    });
+    if (data.staffCases[guildId].length > 5000) data.staffCases[guildId] = data.staffCases[guildId].slice(-5000);
+  }
+  saveData();
+  return true;
 }
 
 const afk = new Map(); // guildId:userId -> { reason, since }
@@ -360,6 +418,25 @@ async function recoverTicketPanels() {
   saveData();
 }
 
+client.on('guildAuditLogEntryCreate', (entry, guild) => {
+  try {
+    const moderatorId = entry.executorId;
+    const targetId = entry.targetId;
+    if (!moderatorId || moderatorId === client.user?.id) return;
+    let action = null;
+    if (entry.action === AuditLogEvent.MemberKick) action = 'kick';
+    else if (entry.action === AuditLogEvent.MemberBanAdd) action = 'ban';
+    else if (entry.action === AuditLogEvent.MemberBanRemove) action = 'unban';
+    else if (entry.action === AuditLogEvent.MemberUpdate) {
+      const timeoutChange = (entry.changes || []).find(change => change.key === 'communication_disabled_until');
+      if (timeoutChange) action = timeoutChange.new ? 'timeout' : 'untimeout';
+    }
+    if (action) recordStaffAction(guild.id, moderatorId, action, targetId, entry.reason || '', 'discord-audit-log');
+  } catch (error) {
+    console.error('Staff audit tracking error:', error);
+  }
+});
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
@@ -396,6 +473,17 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
 
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.author.bot) return;
+  const memberForActivity = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+  if (isStaffMember(memberForActivity)) {
+    const activity = staffStatsFor(message.guild.id, message.author.id);
+    activity.messages = (activity.messages || 0) + 1;
+    activity.lastSeen = Date.now();
+    if (message.content.startsWith(getPrefix(message.guild.id))) {
+      activity.commands = (activity.commands || 0) + 1;
+      activity.lastCommand = Date.now();
+    }
+    saveData();
+  }
   const prefix = getPrefix(message.guild.id);
 
   // Mention an AFK member.
@@ -632,6 +720,48 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '😛 Member Unblehhh’d', `${target.user} was unblehhh’d by ${message.author}.`, 0x5865F2);
       return sendTemp(message.channel, `✅ ${target} is no longer **blehhh**.`, 5000);
     }
+    // STAFF / MEMBER PROFILE
+    if (cmd === 'checkuser' || cmd === 'cu') {
+      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only authorized staff can use this command.', 5000);
+      const targetUser = message.mentions.users.first();
+      if (!targetUser) return sendTemp(message.channel, `Usage: ${prefix}checkuser @user`, 5000);
+      const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+      const staff = targetMember ? isStaffMember(targetMember) : false;
+      const profileStats = staffStatsFor(message.guild.id, targetUser.id);
+      const cases = Array.isArray(data.staffCases[message.guild.id]) ? data.staffCases[message.guild.id] : [];
+      const issued = cases.filter(item => item.moderatorId === targetUser.id);
+      const received = cases.filter(item => item.targetId === targetUser.id);
+      const count = action => issued.filter(item => item.action === action).length;
+      const recentIssued = issued.slice(-8).reverse().map(item => `• **${item.action.toUpperCase()}** <@${item.targetId || targetUser.id}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
+      const recentReceived = received.slice(-6).reverse().map(item => `• **${item.action.toUpperCase()}** by <@${item.moderatorId}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
+      const roles = targetMember ? targetMember.roles.cache.filter(role => role.id !== message.guild.id).map(role => role.toString()).slice(0, 15).join(', ') : 'Not currently in this server';
+      const embed = new EmbedBuilder().setColor(staff ? 0x5865F2 : 0x99AAB5).setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() }).setTitle(staff ? '🛡️ Staff Profile' : '👤 Member Profile').setThumbnail(targetUser.displayAvatarURL()).addFields(
+        { name: 'Account Created', value: `<t:${Math.floor(targetUser.createdTimestamp / 1000)}:D>`, inline: true },
+        { name: 'Joined Server', value: targetMember?.joinedTimestamp ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>` : 'Not in server', inline: true },
+        { name: 'Staff Status', value: staff ? 'Staff permissions detected' : 'No configured staff permissions detected', inline: true },
+        { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
+        { name: 'Warnings Received', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
+        { name: 'Punishments Received (tracked)', value: String(received.length), inline: true }
+      );
+      if (staff) {
+        embed.addFields(
+          { name: 'Warnings Issued', value: String(count('warn')), inline: true },
+          { name: 'Kicks Issued', value: String(count('kick')), inline: true },
+          { name: 'Bans Issued', value: String(count('ban')), inline: true },
+          { name: 'Timeouts Issued', value: String(count('timeout')), inline: true },
+          { name: 'Untimeouts Issued', value: String(count('untimeout')), inline: true },
+          { name: 'Commands Seen', value: String(profileStats.commands || 0), inline: true },
+          { name: 'Messages Seen', value: String(profileStats.messages || 0), inline: true },
+          { name: 'Tickets Closed', value: String(profileStats.ticketsClosed || 0), inline: true },
+          { name: 'Last Seen', value: profileStats.lastSeen ? `<t:${Math.floor(profileStats.lastSeen / 1000)}:R>` : 'Not recorded yet', inline: true },
+          { name: 'Recent Staff Actions', value: truncate(recentIssued.join('\n') || 'No tracked staff actions yet.', 1024), inline: false }
+        );
+      }
+      embed.addFields({ name: 'Recent Moderation Received', value: truncate(recentReceived.join('\n') || 'No tracked moderation cases.', 1024), inline: false });
+      embed.setFooter({ text: 'Stats cover events tracked by 3C and available Discord audit logs; older/unavailable history may be missing.' }).setTimestamp();
+      return message.channel.send({ embeds: [embed] });
+    }
+
     // WARN
     if (cmd === 'warn') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
@@ -640,6 +770,7 @@ client.on('messageCreate', async (message) => {
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       const list = warningsFor(message.guild.id, target.id);
       list.push({ reason, moderatorId: message.author.id, at: Date.now() });
+      recordStaffAction(message.guild.id, message.author.id, 'warn', target.id, reason, '3c');
       saveData();
       await dmModeration(target.user, message.guild, 'warn', message.author, reason);
       await auditLog(message.guild, '⚠️ Member Warned', `${target.user} was warned by ${message.author}.`, 0xF39C12, [
@@ -687,6 +818,7 @@ client.on('messageCreate', async (message) => {
       if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Mute time must be between 1s and 28d, e.g. `10m`.', 5000);
       const reason = cleanReason(args.slice(1));
       await target.timeout(ms, reason || undefined);
+      recordStaffAction(message.guild.id, message.author.id, 'timeout', target.id, reason, '3c');
       await dmModeration(target.user, message.guild, 'mute', message.author, reason);
       await auditLog(message.guild, '🔇 Member Muted', `${target.user} was muted by ${message.author}.`, 0x95A5A6, [
         { name: 'Duration', value: prettyDuration(ms) },
@@ -699,6 +831,7 @@ client.on('messageCreate', async (message) => {
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}unmute @user`, 5000);
       if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot unmute that member because their highest role is equal to or higher than my bot role.', 5000);
       await target.timeout(null);
+      recordStaffAction(message.guild.id, message.author.id, 'untimeout', target.id, 'Timeout removed', '3c');
       return sendTemp(message.channel, `🔊 **${target.user.tag}** was unmuted.`, 6000);
     }
 
@@ -925,6 +1058,7 @@ client.on('messageCreate', async (message) => {
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'kick', message.author, reason);
       await target.kick(reason || undefined);
+      recordStaffAction(message.guild.id, message.author.id, 'kick', target.id, reason, '3c');
       await auditLog(message.guild, '👢 Member Kicked', `${target.user} was kicked by ${message.author}.`, 0xE67E22, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
@@ -939,6 +1073,7 @@ client.on('messageCreate', async (message) => {
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'ban', message.author, reason);
       await target.ban({ reason: reason || undefined });
+      recordStaffAction(message.guild.id, message.author.id, 'ban', target.id, reason, '3c');
       await auditLog(message.guild, '🔨 Member Banned', `${target.user} was banned by ${message.author}.`, 0xE74C3C, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
@@ -953,6 +1088,7 @@ client.on('messageCreate', async (message) => {
       const ban = await message.guild.bans.fetch(id).catch(() => null);
       if (!ban) return sendTemp(message.channel, '❌ That member is not banned.', 5000);
       await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
+      recordStaffAction(message.guild.id, message.author.id, 'unban', id, `Unbanned by ${message.author.tag}`, '3c');
       return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}**.`, 6000);
     }
 
@@ -1299,6 +1435,10 @@ client.on('interactionCreate', async (interaction) => {
       const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
       if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ You cannot close this ticket.',ephemeral:true});
       const reason=interaction.fields.getTextInputValue('ticket:closereason').trim(), ticket=interaction.channel, category=ticket.parent;
+      const closerStats = staffStatsFor(interaction.guild.id, interaction.user.id);
+      closerStats.ticketsClosed = (closerStats.ticketsClosed || 0) + 1;
+      closerStats.lastSeen = Date.now();
+      saveData();
       await auditLog(interaction.guild,'🔒 Ticket Closed',`${ticket} was closed by ${interaction.user}.`,0xED4245,[{name:'Closed By',value:`${interaction.user.tag} (${interaction.user.id})`},{name:'Ticket Creator',value:`<@${ownerId}> (${ownerId})`},{name:'Channel',value:`#${ticket.name} (${ticket.id})`},{name:'Category',value:category?`${category.name} (${category.id})`:'Unknown'},{name:'Close Reason',value:truncate(reason||'No reason provided')}]);
       await interaction.reply({content:`🔒 Ticket closed. Reason: **${reason}**`});
       setTimeout(()=>ticket.delete(`Ticket closed by ${interaction.user.tag}: ${reason}`.slice(0,512)).catch(()=>{}),1200);
