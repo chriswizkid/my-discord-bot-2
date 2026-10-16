@@ -1427,6 +1427,10 @@ client.on('interactionCreate', async (interaction) => {
       config.tagId=tags[0].id;
       config.tagType=tags[0].type;
       saveData();
+      if(config.categoryId){
+        const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
+        return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now customize the public button label, emoji, and color.`,embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
+      }
       return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now select the Ticket Category.`,embeds:[],components:interaction.message.components});
     }
     if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:setupcategory:')) {
