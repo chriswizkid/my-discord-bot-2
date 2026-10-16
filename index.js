@@ -91,17 +91,19 @@ async function initializeMongoDB() {
     mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
     await mongoClient.connect();
     const db = mongoClient.db();
-    mongoCollection = db.collection('bot_state');
-    const stored = await mongoCollection.findOne({ _id: 'main' });
+    const collection = db.collection('bot_state');
+    const stored = await collection.findOne({ _id: 'main' });
 
     if (stored && stored.payload && typeof stored.payload === 'object') {
       data = { ...defaultData, ...stored.payload };
       console.log('Loaded bot data from MongoDB.');
     } else {
       // First connection: migrate the existing local data.json into MongoDB.
-      await mongoCollection.insertOne({ _id: 'main', payload: structuredClone(data), updatedAt: new Date() });
+      await collection.insertOne({ _id: 'main', payload: structuredClone(data), updatedAt: new Date() });
       console.log('Migrated existing DATA_FILE data into MongoDB.');
     }
+    // Only start database writes after the initial load/import has completed.
+    mongoCollection = collection;
   } catch (error) {
     mongoCollection = null;
     if (mongoClient) await mongoClient.close().catch(() => {});
@@ -800,6 +802,7 @@ client.on('messageCreate', async (message) => {
           { name: 'Bans Issued', value: String(count('ban')), inline: true },
           { name: 'Timeouts Issued', value: String(count('timeout')), inline: true },
           { name: 'Untimeouts Issued', value: String(count('untimeout')), inline: true },
+          { name: 'Unbans Issued', value: String(count('unban')), inline: true },
           { name: 'Commands Seen', value: String(profileStats.commands || 0), inline: true },
           { name: 'Messages Seen', value: String(profileStats.messages || 0), inline: true },
           { name: 'Tickets Closed', value: String(profileStats.ticketsClosed || 0), inline: true },
