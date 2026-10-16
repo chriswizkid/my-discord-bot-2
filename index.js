@@ -19,6 +19,12 @@ const {
 
 const fs = require('fs');
 const path = require('path');
+const { MongoClient } = require('mongodb');
+
+const MONGODB_URI = process.env.MONGODB_URI;
+let mongoClient = null;
+let mongoCollection = null;
+let mongoSaveQueue = Promise.resolve();
 
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) throw new Error('Missing DISCORD_TOKEN environment variable.');
@@ -54,12 +60,53 @@ function loadData() {
     return { ...defaultData, ...saved };
   } catch { return structuredClone(defaultData); }
 }
+
 function saveData() {
+  const snapshot = structuredClone(data);
   try {
     fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(DATA_FILE, JSON.stringify(snapshot, null, 2));
   } catch (error) {
-    console.error('Could not save bot data. Check DATA_FILE and persistent storage settings:', error);
+    console.error('Could not save bot data locally:', error);
+  }
+
+  if (mongoCollection) {
+    mongoSaveQueue = mongoSaveQueue
+      .then(() => mongoCollection.replaceOne(
+        { _id: 'main' },
+        { _id: 'main', payload: snapshot, updatedAt: new Date() },
+        { upsert: true }
+      ))
+      .catch(error => console.error('Could not save bot data to MongoDB:', error));
+  }
+}
+
+async function initializeMongoDB() {
+  if (!MONGODB_URI) {
+    console.warn('MONGODB_URI is not set; using DATA_FILE only.');
+    return;
+  }
+
+  try {
+    mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+    await mongoClient.connect();
+    const db = mongoClient.db();
+    mongoCollection = db.collection('bot_state');
+    const stored = await mongoCollection.findOne({ _id: 'main' });
+
+    if (stored && stored.payload && typeof stored.payload === 'object') {
+      data = { ...defaultData, ...stored.payload };
+      console.log('Loaded bot data from MongoDB.');
+    } else {
+      // First connection: migrate the existing local data.json into MongoDB.
+      await mongoCollection.insertOne({ _id: 'main', payload: structuredClone(data), updatedAt: new Date() });
+      console.log('Migrated existing DATA_FILE data into MongoDB.');
+    }
+  } catch (error) {
+    mongoCollection = null;
+    if (mongoClient) await mongoClient.close().catch(() => {});
+    mongoClient = null;
+    console.error('MongoDB connection failed; continuing with DATA_FILE only:', error.message);
   }
 }
 
@@ -433,6 +480,7 @@ client.on('guildAuditLogEntryCreate', (entry, guild) => {
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await initializeMongoDB();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
 });
@@ -582,8 +630,10 @@ client.on('messageCreate', async (message) => {
         score >= 25 ? '💀 The math is struggling' :
         '😭 Absolutely not';
 
+      // Use a curated reaction by compatibility band so the GIF matches the result.
+      const reaction = score >= 90 ? 'kiss' : score >= 75 ? 'hug' : score >= 50 ? 'pat' : score >= 25 ? 'slap' : 'cry';
       try {
-        const response = await fetch('https://api.otakugifs.xyz/gif?reaction=kiss');
+        const response = await fetch(`https://api.otakugifs.xyz/gif?reaction=${reaction}`);
         if (!response.ok) throw new Error(`GIF API returned ${response.status}`);
         const gif = await response.json();
         const embed = new EmbedBuilder()
@@ -758,7 +808,7 @@ client.on('messageCreate', async (message) => {
         );
       }
       embed.addFields({ name: 'Recent Moderation Received', value: truncate(recentReceived.join('\n') || 'No tracked moderation cases.', 1024), inline: false });
-      embed.setFooter({ text: 'Stats cover events tracked by 3C and available Discord audit logs; older/unavailable history may be missing.' }).setTimestamp();
+      embed.setFooter({ text: 'Stats cover 3C and actions visible in Discord audit logs; other bots' private warning histories require import, and unavailable older history may be missing.' }).setTimestamp();
       return message.channel.send({ embeds: [embed] });
     }
 
@@ -1029,23 +1079,26 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'say') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const rawSay = message.content.slice(prefix.length + cmd.length).trimStart();
-      if (!rawSay) return sendTemp(message.channel, `Usage: ${prefix}say <message>`, 5000);
+      const files = [...message.attachments.values()].map(a => a.url);
+      if (!rawSay && files.length === 0) return sendTemp(message.channel, `Usage: ${prefix}say <message> (you can also attach a photo)`, 5000);
       await safeDelete(message);
-      return message.channel.send({ content: rawSay, allowedMentions: { parse: [] } });
+      return message.channel.send({ content: rawSay || undefined, files, allowedMentions: { parse: [] } });
     }
 
-    // REPLY — reply/select a message first, then use !reply <message>.
+    // REPLY — reply/select a message first, then use !reply <message>; attachments are forwarded too.
     if (cmd === 'reply') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const rawReply = message.content.slice(prefix.length + cmd.length).trimStart();
+      const files = [...message.attachments.values()].map(a => a.url);
       const referenceId = message.reference?.messageId;
       if (!referenceId) return sendTemp(message.channel, `❌ First reply to the message you want to target, then use ${prefix}reply <message>.`, 6000);
-      if (!rawReply) return sendTemp(message.channel, `Usage: ${prefix}reply <message>`, 5000);
+      if (!rawReply && files.length === 0) return sendTemp(message.channel, `Usage: ${prefix}reply <message> (you can also attach a photo)`, 5000);
       const referenced = await message.channel.messages.fetch(referenceId).catch(() => null);
       if (!referenced) return sendTemp(message.channel, '❌ I could not find the selected message.', 5000);
       await safeDelete(message);
       return message.channel.send({
-        content: rawReply,
+        content: rawReply || undefined,
+        files,
         reply: { messageReference: referenced.id, failIfNotExists: false },
         allowedMentions: { parse: [] },
       });
