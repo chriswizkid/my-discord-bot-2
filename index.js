@@ -1079,7 +1079,7 @@ client.on('messageCreate', async (message) => {
       saveData();
       const b = new ButtonBuilder().setCustomId(`ticket:setupopen:${id}`).setLabel('Set Up First Ticket Type').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
       await safeDelete(message);
-      const setupMessage = await message.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🎟️ Multi-Ticket Panel Setup').setDescription('Configure the first ticket type. You can add more buttons after it is created (up to 5 types per panel).')], components: [new ActionRowBuilder().addComponents(b)] });
+      const setupMessage = await message.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🎟️ Multi-Ticket Panel Setup').setDescription('Configure the first ticket type. You can add more buttons after it is created (up to 6 types per panel).')], components: [new ActionRowBuilder().addComponents(b)] });
       data.tickets[id].setupMessageId = setupMessage.id;
       saveData();
       return setupMessage;
@@ -1544,7 +1544,7 @@ client.on('interactionCreate', async (interaction) => {
       if(!group||group.guildId!==interaction.guildId) return interaction.reply({content:'❌ This multi-ticket panel setup no longer exists.',ephemeral:true});
       if(interaction.user.id!==group.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can add ticket types.',ephemeral:true});
       const configuredCount=group.ticketIds.filter(ticketId=>data.tickets[ticketId]?.buttonLabel&&data.tickets[ticketId]?.categoryId).length;
-      if(configuredCount>=6) return interaction.reply({content:'❌ This panel already has 5 ticket types, the current limit.',ephemeral:true});
+      if(configuredCount>=6) return interaction.reply({content:'❌ This panel already has 6 ticket types, the current limit.',ephemeral:true});
       const id=`mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id]={guildId:group.guildId,createdBy:group.createdBy,panelChannelId:group.panelChannelId,panelMessageId:group.panelMessageId,categoryId:null,name:'ticket',color:0x5865F2,title:'Create Ticket',embedColor:0x5865F2,tagId:null,tagType:null,tagIds:[],tagTypes:[],panelGroupId:groupId};
       group.ticketIds.push(id);
