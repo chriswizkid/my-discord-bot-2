@@ -8,6 +8,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
+  StringSelectMenuBuilder,
   MentionableSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
@@ -1436,14 +1437,47 @@ client.on('interactionCreate', async (interaction) => {
       if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ Select an existing Discord category.',ephemeral:true});
       config.categoryId=category.id; saveData();
       if(!config.tagId||!config.tagType) return interaction.update({content:'✅ Category saved! Now select the Role/User to Tag.',embeds:[],components:interaction.message.components});
-      const open=new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Open Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
+      const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
+      return interaction.update({content:'✅ Ticket category saved! Now customize the public button label, emoji, and color.',embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:buttonsetup:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`ticket:buttonmodal:${id}`).setTitle('Customize Ticket Button');
+      const f=(field,label,placeholder,required,max)=>new TextInputBuilder().setCustomId(field).setLabel(label).setPlaceholder(placeholder).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(f('ticket:buttonlabel','Button label','Open Ticket',true,80)),
+        new ActionRowBuilder().addComponents(f('ticket:buttonemoji','Button emoji','🎟️',false,100)),
+        new ActionRowBuilder().addComponents(f('ticket:buttoncolor','Button color','Blue, Grey, Green, or Red',true,10))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:buttonmodal:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
+      const label=interaction.fields.getTextInputValue('ticket:buttonlabel').trim();
+      const emoji=interaction.fields.getTextInputValue('ticket:buttonemoji').trim();
+      const colorText=interaction.fields.getTextInputValue('ticket:buttoncolor').trim().toLowerCase();
+      const styles={blue:ButtonStyle.Primary,grey:ButtonStyle.Secondary,gray:ButtonStyle.Secondary,green:ButtonStyle.Success,red:ButtonStyle.Danger};
+      if(!label||!styles[colorText]) return interaction.reply({content:'❌ Enter a button label and choose Blue, Grey, Green, or Red.',ephemeral:true});
+      config.buttonLabel=label;
+      config.buttonEmoji=emoji||null;
+      config.buttonStyleName=colorText==='gray'?'grey':colorText;
+      config.buttonStyle=styles[colorText];
+      saveData();
+      const open=new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel(label).setStyle(styles[colorText]);
+      if(emoji) open.setEmoji(emoji);
       const embed=new EmbedBuilder().setColor(config.embedColor).setTitle(config.title).setDescription(config.description);
       const panelMessage=await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
       config.panelChannelId=interaction.channel.id;
       config.panelMessageId=panelMessage.id;
       saveData();
-      await interaction.update({content:'✅ Ticket panel created! The panel is now visible to everyone in this channel.',embeds:[],components:[]});
-      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category.`,0x5865F2);
+      await interaction.reply({content:`✅ Ticket panel created! Button: **${label}** · Color: **${config.buttonStyleName}**. The panel is now visible to everyone in this channel.`,ephemeral:true});
+      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category and a ${config.buttonStyleName} button.`,0x5865F2);
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('ticket:create:')) {
