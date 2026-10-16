@@ -326,7 +326,7 @@ function commandList(prefix) {
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
     [`${prefix}ticket`, 'Create a single ticket panel with editable embed and button settings.'],
-    [`${prefix}multipleticket`, 'Create one panel with up to five independently configured ticket buttons.'],
+    [`${prefix}multipleticket`, 'Create one panel with up to six independently configured ticket buttons.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
@@ -1068,7 +1068,7 @@ client.on('messageCreate', async (message) => {
       saveData();
       return setupMessage;
     }
-    // MULTI-TICKET PANEL — up to five independently configured ticket types on one public panel.
+    // MULTI-TICKET PANEL — up to six independently configured ticket types on one public panel.
     if (cmd === 'multipleticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const groupId = `multi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
@@ -1506,7 +1506,7 @@ client.on('interactionCreate', async (interaction) => {
       let panelMessage;
       if(group) {
         if(!group.ticketIds.includes(id)) group.ticketIds.push(id);
-        const configuredIds = group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).slice(0,5);
+        const configuredIds = group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).slice(0,6);
         const panelEmbeds = configuredIds.map(buildTicketEmbed);
         const panelButtons = configuredIds.map(buildTicketButton);
         if(!panelEmbeds.length) return interaction.reply({content:'❌ No configured ticket types found.',ephemeral:true});
@@ -1532,7 +1532,7 @@ client.on('interactionCreate', async (interaction) => {
         saveData();
       }
       const configuredCount = group ? group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).length : 5;
-      const addMore = group && configuredCount < 5 ? new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket:addtype:${config.panelGroupId}`).setLabel('Add Another Ticket Type').setEmoji('➕').setStyle(ButtonStyle.Secondary)) : null;
+      const addMore = group && configuredCount < 6 ? new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket:addtype:${config.panelGroupId}`).setLabel('Add Another Ticket Type').setEmoji('➕').setStyle(ButtonStyle.Secondary)) : null;
       await interaction.reply({content:`✅ Ticket panel created/updated! Button: **${label}** · Color: **${config.buttonStyleName}**.${group?' You can add another ticket type below.':''}`,components:addMore?[addMore]:[],ephemeral:true});
       return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category and a ${config.buttonStyleName} button.`,0x5865F2);
     }
@@ -1542,7 +1542,7 @@ client.on('interactionCreate', async (interaction) => {
       if(!group||group.guildId!==interaction.guildId) return interaction.reply({content:'❌ This multi-ticket panel setup no longer exists.',ephemeral:true});
       if(interaction.user.id!==group.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can add ticket types.',ephemeral:true});
       const configuredCount=group.ticketIds.filter(ticketId=>data.tickets[ticketId]?.buttonLabel&&data.tickets[ticketId]?.categoryId).length;
-      if(configuredCount>=5) return interaction.reply({content:'❌ This panel already has 5 ticket types, the current limit.',ephemeral:true});
+      if(configuredCount>=6) return interaction.reply({content:'❌ This panel already has 5 ticket types, the current limit.',ephemeral:true});
       const id=`mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id]={guildId:group.guildId,createdBy:group.createdBy,panelChannelId:group.panelChannelId,panelMessageId:group.panelMessageId,categoryId:null,name:'ticket',color:0x5865F2,title:'Create Ticket',embedColor:0x5865F2,tagId:null,tagType:null,tagIds:[],tagTypes:[],panelGroupId:groupId};
       group.ticketIds.push(id);
