@@ -1509,16 +1509,18 @@ client.on('interactionCreate', async (interaction) => {
         const configuredIds = group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).slice(0,6);
         const panelEmbeds = configuredIds.map(buildTicketEmbed);
         const panelButtons = configuredIds.map(buildTicketButton);
+        const panelRows = [];
+        for (let i = 0; i < panelButtons.length; i += 5) panelRows.push(new ActionRowBuilder().addComponents(...panelButtons.slice(i, i + 5)));
         if(!panelEmbeds.length) return interaction.reply({content:'❌ No configured ticket types found.',ephemeral:true});
         if(group.panelMessageId) {
           const panelChannel = await client.channels.fetch(group.panelChannelId).catch(()=>null);
           panelMessage = panelChannel?.messages ? await panelChannel.messages.fetch(group.panelMessageId).catch(()=>null) : null;
         }
-        if(panelMessage) await panelMessage.edit({embeds:panelEmbeds,components:[new ActionRowBuilder().addComponents(...panelButtons)]});
+        if(panelMessage) await panelMessage.edit({embeds:panelEmbeds,components:panelRows});
         else {
           const panelChannel = await client.channels.fetch(group.panelChannelId).catch(()=>null);
           if(!panelChannel?.isTextBased()) return interaction.reply({content:'❌ I could not find the channel where this multi-ticket panel should be posted.',ephemeral:true});
-          panelMessage = await panelChannel.send({embeds:panelEmbeds,components:[new ActionRowBuilder().addComponents(...panelButtons)]});
+          panelMessage = await panelChannel.send({embeds:panelEmbeds,components:panelRows});
           group.panelMessageId = panelMessage.id;
         }
         group.panelChannelId = panelMessage.channelId;
