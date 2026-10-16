@@ -27,7 +27,7 @@ let mongoClient = null;
 let mongoCollection = null;
 let mongoSaveQueue = Promise.resolve();
 
-const TOKEN = process.env.DISCORD_TOKEN;
+const TOKEN = process.env.DISCORD_TOKEN || process.env.MY_DISC_TOKEN || process.env['my disc token'];
 if (!TOKEN) throw new Error('Missing DISCORD_TOKEN environment variable.');
 
 const client = new Client({
