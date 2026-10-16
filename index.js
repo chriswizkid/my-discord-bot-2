@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const {
   Client,
   GatewayIntentBits,
@@ -115,6 +117,11 @@ async function initializeMongoDB() {
 }
 
 const STAFF_ROLE_ID = '1514317861706006598';
+const LEVEL_30_ROLE_ID = '1527252788634193960';
+
+function isLevel30Member(member) {
+  return Boolean(member?.roles?.cache?.has(LEVEL_30_ROLE_ID));
+}
 
 function isStaffMember(member) {
   if (!member) return false;
@@ -314,7 +321,8 @@ function commandList(prefix) {
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
     [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
     [`${prefix}serverinfo`, 'Show server statistics and icon.'],
-    [`${prefix}checkuser @user`, 'Show a member profile or staff activity/moderation dashboard. Staff only.'],
+    [`${prefix}checkuser @user`, 'Show a normal member profile and tracked warnings received (Level 30+ role).'],
+    [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
     [`${prefix}slowmode <time|off>`, 'Set channel slowmode or turn it off, e.g. 10s, 5m, 1h, off.'],
@@ -326,7 +334,7 @@ function commandList(prefix) {
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
     [`${prefix}ticket`, 'Create a single ticket panel with editable embed and button settings.'],
-    [`${prefix}multipleticket`, 'Create one panel with up to six independently configured ticket buttons.'],
+    [`${prefix}multipleticket`, 'Create one shared embed with up to six ticket buttons.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
@@ -771,50 +779,64 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '😛 Member Unblehhh’d', `${target.user} was unblehhh’d by ${message.author}.`, 0x5865F2);
       return sendTemp(message.channel, `✅ ${target} is no longer **blehhh**.`, 5000);
     }
-    // STAFF / MEMBER PROFILE
+    // NORMAL MEMBER PROFILE: Level 30 role or staff can use this. Does not expose staff-issued statistics.
     if (cmd === 'checkuser' || cmd === 'cu') {
-      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only authorized staff can use this command.', 5000);
+      if (!isLevel30Member(message.member) && !isStaffMember(message.member)) return sendTemp(message.channel, '❌ You need the Level 30 role or staff access to use this command.', 5000);
       const targetUser = message.mentions.users.first();
       if (!targetUser) return sendTemp(message.channel, `Usage: ${prefix}checkuser @user`, 5000);
       const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
-      const staff = targetMember ? isStaffMember(targetMember) : false;
-      const profileStats = staffStatsFor(message.guild.id, targetUser.id);
+      const received = (Array.isArray(data.staffCases[message.guild.id]) ? data.staffCases[message.guild.id] : []).filter(item => item.targetId === targetUser.id);
+      const roles = targetMember ? targetMember.roles.cache.filter(role => role.id !== message.guild.id).map(role => role.toString()).slice(0, 15).join(', ') : 'Not currently in this server';
+      const embed = new EmbedBuilder().setColor(0x99AAB5)
+        .setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() })
+        .setTitle('👤 Member Profile')
+        .setThumbnail(targetUser.displayAvatarURL())
+        .addFields(
+          { name: 'Account Created', value: `<t:${Math.floor(targetUser.createdTimestamp / 1000)}:D>`, inline: true },
+          { name: 'Joined Server', value: targetMember?.joinedTimestamp ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>` : 'Not in server', inline: true },
+          { name: 'Staff Status', value: targetMember && isStaffMember(targetMember) ? 'Staff member' : 'Not staff', inline: true },
+          { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
+          { name: 'Warnings Received (3C tracked)', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
+          { name: 'Moderation Cases Received (tracked)', value: String(received.length), inline: true }
+        )
+        .setFooter({ text: 'Warning history from other bots is only available if their logs/data are imported.' }).setTimestamp();
+      return message.channel.send({ embeds: [embed] });
+    }
+
+    // STAFF-ONLY MODERATION DASHBOARD: actions this staff member has issued, as tracked by 3C.
+    if (cmd === 'modcheck') {
+      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only authorized staff can use this command.', 5000);
+      const targetUser = message.mentions.users.first();
+      if (!targetUser) return sendTemp(message.channel, `Usage: ${prefix}modcheck @staff`, 5000);
+      const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember || !isStaffMember(targetMember)) return sendTemp(message.channel, '❌ You can use this command only to inspect a staff member.', 5000);
       const cases = Array.isArray(data.staffCases[message.guild.id]) ? data.staffCases[message.guild.id] : [];
       const issued = cases.filter(item => item.moderatorId === targetUser.id);
       const received = cases.filter(item => item.targetId === targetUser.id);
-      const legacyWarningsIssued = Object.entries(data.warnings || {})
+      const warningsIssued = Object.entries(data.warnings || {})
         .filter(([warningKey]) => warningKey.startsWith(`${message.guild.id}:`))
         .flatMap(([, items]) => Array.isArray(items) ? items : [])
         .filter(item => item.moderatorId === targetUser.id).length;
-      const count = action => action === 'warn' ? legacyWarningsIssued : issued.filter(item => item.action === action).length;
-      const recentIssued = issued.slice(-8).reverse().map(item => `• **${item.action.toUpperCase()}** <@${item.targetId || targetUser.id}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
-      const recentReceived = received.slice(-6).reverse().map(item => `• **${item.action.toUpperCase()}** by <@${item.moderatorId}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
-      const roles = targetMember ? targetMember.roles.cache.filter(role => role.id !== message.guild.id).map(role => role.toString()).slice(0, 15).join(', ') : 'Not currently in this server';
-      const embed = new EmbedBuilder().setColor(staff ? 0x5865F2 : 0x99AAB5).setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() }).setTitle(staff ? '🛡️ Staff Profile' : '👤 Member Profile').setThumbnail(targetUser.displayAvatarURL()).addFields(
-        { name: 'Account Created', value: `<t:${Math.floor(targetUser.createdTimestamp / 1000)}:D>`, inline: true },
-        { name: 'Joined Server', value: targetMember?.joinedTimestamp ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>` : 'Not in server', inline: true },
-        { name: 'Staff Status', value: staff ? 'Staff permissions detected' : 'No configured staff permissions detected', inline: true },
-        { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
-        { name: 'Warnings Received', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
-        { name: 'Punishments Received (tracked)', value: String(received.length), inline: true }
-      );
-      if (staff) {
-        embed.addFields(
+      const count = action => action === 'warn' ? Math.max(warningsIssued, issued.filter(item => item.action === 'warn').length) : issued.filter(item => item.action === action).length;
+      const stats = staffStatsFor(message.guild.id, targetUser.id);
+      const recent = issued.slice(-10).reverse().map(item => `• **${item.action.toUpperCase()}** <@${item.targetId || targetUser.id}> — ${truncate(item.reason || 'No reason', 150)} • <t:${Math.floor(item.at / 1000)}:R>`);
+      const embed = new EmbedBuilder().setColor(0x5865F2)
+        .setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() })
+        .setTitle('🛡️ Staff Moderation Dashboard')
+        .setThumbnail(targetUser.displayAvatarURL())
+        .addFields(
           { name: 'Warnings Issued', value: String(count('warn')), inline: true },
           { name: 'Kicks Issued', value: String(count('kick')), inline: true },
           { name: 'Bans Issued', value: String(count('ban')), inline: true },
           { name: 'Timeouts Issued', value: String(count('timeout')), inline: true },
           { name: 'Untimeouts Issued', value: String(count('untimeout')), inline: true },
           { name: 'Unbans Issued', value: String(count('unban')), inline: true },
-          { name: 'Commands Seen', value: String(profileStats.commands || 0), inline: true },
-          { name: 'Messages Seen', value: String(profileStats.messages || 0), inline: true },
-          { name: 'Tickets Closed', value: String(profileStats.ticketsClosed || 0), inline: true },
-          { name: 'Last Seen', value: profileStats.lastSeen ? `<t:${Math.floor(profileStats.lastSeen / 1000)}:R>` : 'Not recorded yet', inline: true },
-          { name: 'Recent Staff Actions', value: truncate(recentIssued.join('\n') || 'No tracked staff actions yet.', 1024), inline: false }
-        );
-      }
-      embed.addFields({ name: 'Recent Moderation Received', value: truncate(recentReceived.join('\n') || 'No tracked moderation cases.', 1024), inline: false });
-      embed.setFooter({ text: 'Stats cover 3C and actions visible in Discord audit logs; other bots' private warning histories require import, and unavailable older history may be missing.' }).setTimestamp();
+          { name: 'Tickets Closed', value: String(stats.ticketsClosed || 0), inline: true },
+          { name: 'Tracked Actions', value: String(issued.length), inline: true },
+          { name: 'Moderation Cases Received', value: String(received.length), inline: true },
+          { name: 'Recent Actions', value: truncate(recent.join('\n') || 'No tracked staff actions yet.', 1024), inline: false }
+        )
+        .setFooter({ text: "3C-tracked actions only; other bots' private staff records need to be imported." }).setTimestamp();
       return message.channel.send({ embeds: [embed] });
     }
 
@@ -1072,7 +1094,7 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'multipleticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const groupId = `multi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [] };
+      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'Support 📬', panelDescription: 'To create a ticket use the Create ticket button', footerText: '3C Bot ~ some cool line I want', embedColor: 0x232428 };
       const id = `mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null, tagIds: [], tagTypes: [], panelGroupId: groupId };
       data.ticketPanels[groupId].ticketIds.push(id);
@@ -1499,7 +1521,10 @@ client.on('interactionCreate', async (interaction) => {
       };
       const buildTicketEmbed = ticketId => {
         const ticketConfig = data.tickets[ticketId];
-        return new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
+        const parentGroup = ticketConfig.panelGroupId ? data.ticketPanels[ticketConfig.panelGroupId] : null;
+        const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
+        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3C Bot ~ some cool line I want', iconURL: client.user.displayAvatarURL() });
+        return embed;
       };
       config.panelChannelId=interaction.channel.id;
       const group = config.panelGroupId ? data.ticketPanels[config.panelGroupId] : null;
@@ -1507,20 +1532,24 @@ client.on('interactionCreate', async (interaction) => {
       if(group) {
         if(!group.ticketIds.includes(id)) group.ticketIds.push(id);
         const configuredIds = group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).slice(0,6);
-        const panelEmbeds = configuredIds.map(buildTicketEmbed);
+        const panelEmbed = new EmbedBuilder()
+          .setColor(group.embedColor ?? 0x232428)
+          .setTitle(group.panelTitle || 'Support 📬')
+          .setDescription(group.panelDescription || 'To create a ticket use the Create ticket button')
+          .setFooter({ text: group.footerText || '3C Bot ~ some cool line I want', iconURL: client.user.displayAvatarURL() });
         const panelButtons = configuredIds.map(buildTicketButton);
         const panelRows = [];
         for (let i = 0; i < panelButtons.length; i += 5) panelRows.push(new ActionRowBuilder().addComponents(...panelButtons.slice(i, i + 5)));
-        if(!panelEmbeds.length) return interaction.reply({content:'❌ No configured ticket types found.',ephemeral:true});
+        if(!panelButtons.length) return interaction.reply({content:'❌ No configured ticket types found.',ephemeral:true});
         if(group.panelMessageId) {
           const panelChannel = await client.channels.fetch(group.panelChannelId).catch(()=>null);
           panelMessage = panelChannel?.messages ? await panelChannel.messages.fetch(group.panelMessageId).catch(()=>null) : null;
         }
-        if(panelMessage) await panelMessage.edit({embeds:panelEmbeds,components:panelRows});
+        if(panelMessage) await panelMessage.edit({embeds:[panelEmbed],components:panelRows});
         else {
           const panelChannel = await client.channels.fetch(group.panelChannelId).catch(()=>null);
           if(!panelChannel?.isTextBased()) return interaction.reply({content:'❌ I could not find the channel where this multi-ticket panel should be posted.',ephemeral:true});
-          panelMessage = await panelChannel.send({embeds:panelEmbeds,components:panelRows});
+          panelMessage = await panelChannel.send({embeds:[panelEmbed],components:panelRows});
           group.panelMessageId = panelMessage.id;
         }
         group.panelChannelId = panelMessage.channelId;
@@ -1534,9 +1563,67 @@ client.on('interactionCreate', async (interaction) => {
         saveData();
       }
       const configuredCount = group ? group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).length : 5;
+      const editPanel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(group ? `ticket:panelsetup:${config.panelGroupId}` : `ticket:panelsetup:${id}`).setLabel('Edit Panel Title, Description & Footer').setEmoji('📝').setStyle(ButtonStyle.Secondary));
       const addMore = group && configuredCount < 6 ? new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket:addtype:${config.panelGroupId}`).setLabel('Add Another Ticket Type').setEmoji('➕').setStyle(ButtonStyle.Secondary)) : null;
-      await interaction.reply({content:`✅ Ticket panel created/updated! Button: **${label}** · Color: **${config.buttonStyleName}**.${group?' You can add another ticket type below.':''}`,components:addMore?[addMore]:[],ephemeral:true});
+      await interaction.reply({content:`✅ Ticket panel created/updated! Button: **${label}** · Color: **${config.buttonStyleName}**.${group?' You can edit the shared embed or add another ticket type below.':' You can edit the embed footer below.'}`,components:addMore?[editPanel,addMore]:[editPanel],ephemeral:true});
       return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category and a ${config.buttonStyleName} button.`,0x5865F2);
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:panelsetup:')) {
+      const panelId = interaction.customId.split(':')[2];
+      const group = data.ticketPanels[panelId];
+      const config = data.tickets[panelId];
+      const ownerId = group?.createdBy || config?.createdBy;
+      const guildId = group?.guildId || config?.guildId;
+      if (!ownerId || guildId !== interaction.guildId) return interaction.reply({ content: '❌ This panel setup no longer exists.', ephemeral: true });
+      if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
+      const currentTitle = group?.panelTitle || config?.title || 'Support 📬';
+      const currentDescription = group?.panelDescription || config?.description || 'To create a ticket use the Create ticket button';
+      const currentFooter = group?.footerText || config?.footerText || '3C Bot ~ some cool line I want';
+      const modal = new ModalBuilder().setCustomId(`ticket:panelmodal:${panelId}`).setTitle('Edit Ticket Panel Embed');
+      const f = (field, label, value, style, max) => new TextInputBuilder().setCustomId(field).setLabel(label).setValue(String(value).slice(0,max)).setStyle(style).setRequired(true).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(f('panel:title', 'Panel title', currentTitle, TextInputStyle.Short, 256)),
+        new ActionRowBuilder().addComponents(f('panel:description', 'Panel description', currentDescription, TextInputStyle.Paragraph, 1000)),
+        new ActionRowBuilder().addComponents(f('panel:footer', 'Footer text', currentFooter, TextInputStyle.Short, 200))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:panelmodal:')) {
+      const panelId = interaction.customId.split(':')[2];
+      const group = data.ticketPanels[panelId];
+      const config = data.tickets[panelId];
+      const ownerId = group?.createdBy || config?.createdBy;
+      const guildId = group?.guildId || config?.guildId;
+      if (!ownerId || guildId !== interaction.guildId) return interaction.reply({ content: '❌ This panel setup no longer exists.', ephemeral: true });
+      if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
+      const title = interaction.fields.getTextInputValue('panel:title').trim();
+      const description = interaction.fields.getTextInputValue('panel:description').trim();
+      const footerText = interaction.fields.getTextInputValue('panel:footer').trim();
+      if (!title || !description || !footerText) return interaction.reply({ content: '❌ Title, description, and footer text cannot be blank.', ephemeral: true });
+      if (group) {
+        group.panelTitle = title;
+        group.panelDescription = description;
+        group.footerText = footerText;
+      } else {
+        config.title = title;
+        config.description = description;
+        config.footerText = footerText;
+      }
+      saveData();
+      let panelMessage = null;
+      const channelId = group?.panelChannelId || config.panelChannelId;
+      const messageId = group?.panelMessageId || config.panelMessageId;
+      const channel = channelId ? await client.channels.fetch(channelId).catch(() => null) : null;
+      if (channel?.messages && messageId) panelMessage = await channel.messages.fetch(messageId).catch(() => null);
+      if (panelMessage) {
+        const embed = new EmbedBuilder().setColor(group?.embedColor ?? config?.embedColor ?? 0x232428)
+          .setTitle(title).setDescription(description)
+          .setFooter({ text: footerText, iconURL: client.user.displayAvatarURL() });
+        await panelMessage.edit({ embeds: [embed] });
+      }
+      return interaction.reply({ content: '✅ Panel title, description, and footer saved. The bot profile picture is automatically shown beside the footer.', ephemeral: true });
     }
 
     if (interaction.isButton() && interaction.customId.startsWith('ticket:addtype:')) {
@@ -1572,7 +1659,7 @@ client.on('interactionCreate', async (interaction) => {
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.title});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3C Bot ~ some cool line I want', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
       const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
