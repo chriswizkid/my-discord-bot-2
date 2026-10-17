@@ -971,9 +971,9 @@ client.on('messageCreate', async (message) => {
       const permissionNames = role.permissions.toArray().map(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' '));
       const leftPermissions = permissionNames.filter((_, i) => i % 2 === 0);
       const rightPermissions = permissionNames.filter((_, i) => i % 2 === 1);
-      const permissionText = list => truncate(list.join('\\n') || 'No permissions', 1024);
+      const permissionText = list => truncate(list.join('\n') || 'No permissions', 1024);
       const e = new EmbedBuilder().setColor(role.color || 0x5865F2).setTitle('🎭 Role Information')
-        .setDescription(`**Role:** ${role}\\n**Role ID:** \`${role.id}\`\\n**Hoisted:** ${role.hoist ? 'Yes' : 'No'}\\n**Mentionable:** ${role.mentionable ? 'Yes' : 'No'}\\n**Position from top:** ${positionFromTop} of ${orderedRoles.length}\\n**Created:** <t:${Math.floor(role.createdTimestamp / 1000)}:F>`)
+        .setDescription(`**Role:** ${role}\n**Role ID:** \`${role.id}\`\n**Hoisted:** ${role.hoist ? 'Yes' : 'No'}\n**Mentionable:** ${role.mentionable ? 'Yes' : 'No'}\n**Position from top:** ${positionFromTop} of ${orderedRoles.length}\n**Created:** <t:${Math.floor(role.createdTimestamp / 1000)}:F>`)
         .addFields(
           { name: 'Permissions · 1', value: permissionText(leftPermissions), inline: true },
           { name: 'Permissions · 2', value: permissionText(rightPermissions), inline: true }
@@ -1302,7 +1302,7 @@ client.on('messageCreate', async (message) => {
     // REPORT LOG SETUP — connect to an existing channel only; never create a channel.
     if (cmd === 'setupreportlog' || cmd === 'setupreport') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.Administrator)) {
-        return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupreportlog.`, 5000);
+        return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupreport or ${prefix}setupreportlog.`, 5000);
       }
 
       const mentionedChannel = message.mentions.channels.first();
@@ -1410,9 +1410,9 @@ client.on('messageCreate', async (message) => {
       let colorText, embedText;
       if (isLegacy) {
         colorText = legacyParts[0];
-        embedText = `**${legacyParts[1]}**\\n\\n${legacyParts.slice(2, 4).filter(Boolean).join('\\n\\n')}`;
+        embedText = `**${legacyParts[1]}**\n\n${legacyParts.slice(2, 4).filter(Boolean).join('\n\n')}`;
       } else {
-        const match = raw.match(/^(#?[0-9a-fA-F]{6})(?:\\s+([\\s\\S]*))?$/);
+        const match = raw.match(/^(#?[0-9a-fA-F]{6})(?:\s+([\s\S]*))?$/);
         if (!match) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text>`, 7000);
         colorText = match[1];
         embedText = (match[2] || '').trim();
@@ -1781,7 +1781,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isButton() && interaction.customId==='ticket:close') {
       const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
-      const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      const ownerId=topic.split(':')[1], staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
       if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ Only the ticket creator or Manage Channels staff can close this ticket.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
       modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000)));
@@ -1790,7 +1790,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId==='ticket:closemodal') {
       const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
-      const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      const ownerId=topic.split(':')[1], staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
       if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ You cannot close this ticket.',ephemeral:true});
       const reason=interaction.fields.getTextInputValue('ticket:closereason').trim(), ticket=interaction.channel, category=ticket.parent;
       if (staff) {
