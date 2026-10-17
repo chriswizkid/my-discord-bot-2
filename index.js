@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const {
   Client,
   GatewayIntentBits,
@@ -8,6 +10,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelSelectMenuBuilder,
+  StringSelectMenuBuilder,
   MentionableSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
@@ -19,8 +22,14 @@ const {
 
 const fs = require('fs');
 const path = require('path');
+const { MongoClient } = require('mongodb');
 
-const TOKEN = process.env.DISCORD_TOKEN;
+const MONGODB_URI = process.env.MONGODB_URI;
+let mongoClient = null;
+let mongoCollection = null;
+let mongoSaveQueue = Promise.resolve();
+
+const TOKEN = process.env.DISCORD_TOKEN || process.env.MY_DISC_TOKEN || process.env['my disc token'];
 if (!TOKEN) throw new Error('Missing DISCORD_TOKEN environment variable.');
 
 const client = new Client({
@@ -41,9 +50,11 @@ const defaultData = {
   prefixes: {},
   warnings: {},
   tickets: {},
+  ticketPanels: {},
   auditChannels: {},
   reportLogs: {},
   reportCooldowns: {},
+  reportsReceived: {},
   staffStats: {},
   staffCases: {},
 };
@@ -54,16 +65,64 @@ function loadData() {
     return { ...defaultData, ...saved };
   } catch { return structuredClone(defaultData); }
 }
+
 function saveData() {
+  const snapshot = structuredClone(data);
   try {
     fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(DATA_FILE, JSON.stringify(snapshot, null, 2));
   } catch (error) {
-    console.error('Could not save bot data. Check DATA_FILE and persistent storage settings:', error);
+    console.error('Could not save bot data locally:', error);
+  }
+
+  if (mongoCollection) {
+    mongoSaveQueue = mongoSaveQueue
+      .then(() => mongoCollection.replaceOne(
+        { _id: 'main' },
+        { _id: 'main', payload: snapshot, updatedAt: new Date() },
+        { upsert: true }
+      ))
+      .catch(error => console.error('Could not save bot data to MongoDB:', error));
+  }
+}
+
+async function initializeMongoDB() {
+  if (!MONGODB_URI) {
+    console.warn('MONGODB_URI is not set; using DATA_FILE only.');
+    return;
+  }
+
+  try {
+    mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+    await mongoClient.connect();
+    const db = mongoClient.db();
+    const collection = db.collection('bot_state');
+    const stored = await collection.findOne({ _id: 'main' });
+
+    if (stored && stored.payload && typeof stored.payload === 'object') {
+      data = { ...defaultData, ...stored.payload };
+      console.log('Loaded bot data from MongoDB.');
+    } else {
+      // First connection: migrate the existing local data.json into MongoDB.
+      await collection.insertOne({ _id: 'main', payload: structuredClone(data), updatedAt: new Date() });
+      console.log('Migrated existing DATA_FILE data into MongoDB.');
+    }
+    // Only start database writes after the initial load/import has completed.
+    mongoCollection = collection;
+  } catch (error) {
+    mongoCollection = null;
+    if (mongoClient) await mongoClient.close().catch(() => {});
+    mongoClient = null;
+    console.error('MongoDB connection failed; continuing with DATA_FILE only:', error.message);
   }
 }
 
 const STAFF_ROLE_ID = '1514317861706006598';
+const LEVEL_30_ROLE_ID = '1527252788634193960';
+
+function isLevel30Member(member) {
+  return Boolean(member?.roles?.cache?.has(LEVEL_30_ROLE_ID));
+}
 
 function isStaffMember(member) {
   if (!member) return false;
@@ -263,7 +322,11 @@ function commandList(prefix) {
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
     [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
     [`${prefix}serverinfo`, 'Show server statistics and icon.'],
-    [`${prefix}checkuser @user`, 'Show a member profile or staff activity/moderation dashboard. Staff only.'],
+    [`${prefix}roleinfo @role`, 'Show role details and permissions in two columns.'],
+    [`${prefix}checkuser @user`, 'Show a normal member profile and tracked warnings received (Level 30+ role).'],
+    [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
+    [`${prefix}embed #HEX <message>`, 'Send multiline text, Markdown and mentions inside a custom-color embed; attach a photo to include it.'],
+    [`${prefix}panelbutton <messageID> | label | #channel or URL`, 'Add a button to one of your bot messages.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
     [`${prefix}slowmode <time|off>`, 'Set channel slowmode or turn it off, e.g. 10s, 5m, 1h, off.'],
@@ -274,7 +337,8 @@ function commandList(prefix) {
     [`${prefix}cs`, 'Clear deleted-message snipes.'],
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
-    [`${prefix}ticket`, 'Create a ticket panel, then select the existing Discord category for that panel.'],
+    [`${prefix}ticket`, 'Create a single ticket panel with editable embed and button settings.'],
+    [`${prefix}multipleticket`, 'Create one shared embed with up to six ticket buttons.'],
     [`${prefix}closeticket/ ct`, 'Close the current ticket.'],
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
@@ -283,7 +347,7 @@ function commandList(prefix) {
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
     [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
     [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
-    [`${prefix}setupreportlog #channel`, 'Connect the 3C User Report log to an existing channel.'],
+    [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3C User Report log to an existing channel.'],
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
@@ -371,7 +435,7 @@ async function recoverTicketPanels() {
             if (overwriteId === everyoneId || overwriteId === meId) continue;
             if (overwrite.type === OverwriteType.Role) recoveredTags.push({ id: overwriteId, type: 'role' });
             if (overwrite.type === OverwriteType.Member) {
-              const ownerId = existingTicket.topic.slice('3C-TICKET:'.length);
+              const ownerId = existingTicket.topic.split(':')[1];
               if (overwriteId !== ownerId) recoveredTags.push({ id: overwriteId, type: 'user' });
             }
           }
@@ -433,6 +497,7 @@ client.on('guildAuditLogEntryCreate', (entry, guild) => {
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await initializeMongoDB();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
 });
@@ -582,8 +647,10 @@ client.on('messageCreate', async (message) => {
         score >= 25 ? '💀 The math is struggling' :
         '😭 Absolutely not';
 
+      // Use a curated reaction by compatibility band so the GIF matches the result.
+      const reaction = score >= 90 ? 'kiss' : score >= 75 ? 'hug' : score >= 50 ? 'pat' : score >= 25 ? 'slap' : 'cry';
       try {
-        const response = await fetch('https://api.otakugifs.xyz/gif?reaction=kiss');
+        const response = await fetch(`https://api.otakugifs.xyz/gif?reaction=${reaction}`);
         if (!response.ok) throw new Error(`GIF API returned ${response.status}`);
         const gif = await response.json();
         const embed = new EmbedBuilder()
@@ -716,49 +783,65 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '😛 Member Unblehhh’d', `${target.user} was unblehhh’d by ${message.author}.`, 0x5865F2);
       return sendTemp(message.channel, `✅ ${target} is no longer **blehhh**.`, 5000);
     }
-    // STAFF / MEMBER PROFILE
+    // NORMAL MEMBER PROFILE: Level 30 role or staff can use this. Does not expose staff-issued statistics.
     if (cmd === 'checkuser' || cmd === 'cu') {
-      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only authorized staff can use this command.', 5000);
+      if (!isLevel30Member(message.member) && !isStaffMember(message.member)) return sendTemp(message.channel, '❌ You need the Level 30 role or staff access to use this command.', 5000);
       const targetUser = message.mentions.users.first();
       if (!targetUser) return sendTemp(message.channel, `Usage: ${prefix}checkuser @user`, 5000);
       const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
-      const staff = targetMember ? isStaffMember(targetMember) : false;
-      const profileStats = staffStatsFor(message.guild.id, targetUser.id);
+      const received = (Array.isArray(data.staffCases[message.guild.id]) ? data.staffCases[message.guild.id] : []).filter(item => item.targetId === targetUser.id);
+      const roles = targetMember ? targetMember.roles.cache.filter(role => role.id !== message.guild.id).map(role => role.toString()).slice(0, 15).join(', ') : 'Not currently in this server';
+      const embed = new EmbedBuilder().setColor(0x99AAB5)
+        .setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() })
+        .setTitle('👤 Member Profile')
+        .setThumbnail(targetUser.displayAvatarURL())
+        .addFields(
+          { name: 'Account Created', value: `<t:${Math.floor(targetUser.createdTimestamp / 1000)}:D>`, inline: true },
+          { name: 'Joined Server', value: targetMember?.joinedTimestamp ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>` : 'Not in server', inline: true },
+          { name: 'Staff Status', value: targetMember && isStaffMember(targetMember) ? 'Staff member' : 'Not staff', inline: true },
+          { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
+          { name: 'Warnings Received (3C tracked)', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
+          { name: 'Moderation Cases Received (tracked)', value: String(received.length), inline: true },
+          { name: 'Reports Received', value: String(Number(data.reportsReceived?.[key(message.guild.id, targetUser.id)] || 0)), inline: true }
+        )
+        .setFooter({ text: 'Warning history from other bots is only available if their logs/data are imported.' }).setTimestamp();
+      return message.channel.send({ embeds: [embed] });
+    }
+
+    // STAFF-ONLY MODERATION DASHBOARD: actions this staff member has issued, as tracked by 3C.
+    if (cmd === 'modcheck') {
+      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only authorized staff can use this command.', 5000);
+      const targetUser = message.mentions.users.first();
+      if (!targetUser) return sendTemp(message.channel, `Usage: ${prefix}modcheck @staff`, 5000);
+      const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember || !isStaffMember(targetMember)) return sendTemp(message.channel, '❌ You can use this command only to inspect a staff member.', 5000);
       const cases = Array.isArray(data.staffCases[message.guild.id]) ? data.staffCases[message.guild.id] : [];
       const issued = cases.filter(item => item.moderatorId === targetUser.id);
       const received = cases.filter(item => item.targetId === targetUser.id);
-      const legacyWarningsIssued = Object.entries(data.warnings || {})
+      const warningsIssued = Object.entries(data.warnings || {})
         .filter(([warningKey]) => warningKey.startsWith(`${message.guild.id}:`))
         .flatMap(([, items]) => Array.isArray(items) ? items : [])
         .filter(item => item.moderatorId === targetUser.id).length;
-      const count = action => action === 'warn' ? legacyWarningsIssued : issued.filter(item => item.action === action).length;
-      const recentIssued = issued.slice(-8).reverse().map(item => `• **${item.action.toUpperCase()}** <@${item.targetId || targetUser.id}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
-      const recentReceived = received.slice(-6).reverse().map(item => `• **${item.action.toUpperCase()}** by <@${item.moderatorId}> — ${item.reason || 'No reason'} • <t:${Math.floor(item.at / 1000)}:R>`);
-      const roles = targetMember ? targetMember.roles.cache.filter(role => role.id !== message.guild.id).map(role => role.toString()).slice(0, 15).join(', ') : 'Not currently in this server';
-      const embed = new EmbedBuilder().setColor(staff ? 0x5865F2 : 0x99AAB5).setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() }).setTitle(staff ? '🛡️ Staff Profile' : '👤 Member Profile').setThumbnail(targetUser.displayAvatarURL()).addFields(
-        { name: 'Account Created', value: `<t:${Math.floor(targetUser.createdTimestamp / 1000)}:D>`, inline: true },
-        { name: 'Joined Server', value: targetMember?.joinedTimestamp ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>` : 'Not in server', inline: true },
-        { name: 'Staff Status', value: staff ? 'Staff permissions detected' : 'No configured staff permissions detected', inline: true },
-        { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
-        { name: 'Warnings Received', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
-        { name: 'Punishments Received (tracked)', value: String(received.length), inline: true }
-      );
-      if (staff) {
-        embed.addFields(
+      const count = action => action === 'warn' ? Math.max(warningsIssued, issued.filter(item => item.action === 'warn').length) : issued.filter(item => item.action === action).length;
+      const stats = staffStatsFor(message.guild.id, targetUser.id);
+      const recent = issued.slice(-10).reverse().map(item => `• **${item.action.toUpperCase()}** <@${item.targetId || targetUser.id}> — ${truncate(item.reason || 'No reason', 150)} • <t:${Math.floor(item.at / 1000)}:R>`);
+      const embed = new EmbedBuilder().setColor(0x5865F2)
+        .setAuthor({ name: targetUser.tag, iconURL: targetUser.displayAvatarURL() })
+        .setTitle('🛡️ Staff Moderation Dashboard')
+        .setThumbnail(targetUser.displayAvatarURL())
+        .addFields(
           { name: 'Warnings Issued', value: String(count('warn')), inline: true },
           { name: 'Kicks Issued', value: String(count('kick')), inline: true },
           { name: 'Bans Issued', value: String(count('ban')), inline: true },
           { name: 'Timeouts Issued', value: String(count('timeout')), inline: true },
           { name: 'Untimeouts Issued', value: String(count('untimeout')), inline: true },
-          { name: 'Commands Seen', value: String(profileStats.commands || 0), inline: true },
-          { name: 'Messages Seen', value: String(profileStats.messages || 0), inline: true },
-          { name: 'Tickets Closed', value: String(profileStats.ticketsClosed || 0), inline: true },
-          { name: 'Last Seen', value: profileStats.lastSeen ? `<t:${Math.floor(profileStats.lastSeen / 1000)}:R>` : 'Not recorded yet', inline: true },
-          { name: 'Recent Staff Actions', value: truncate(recentIssued.join('\n') || 'No tracked staff actions yet.', 1024), inline: false }
-        );
-      }
-      embed.addFields({ name: 'Recent Moderation Received', value: truncate(recentReceived.join('\n') || 'No tracked moderation cases.', 1024), inline: false });
-      embed.setFooter({ text: 'Stats cover events tracked by 3C and available Discord audit logs; older/unavailable history may be missing.' }).setTimestamp();
+          { name: 'Unbans Issued', value: String(count('unban')), inline: true },
+          { name: 'Tickets Closed', value: String(stats.ticketsClosed || 0), inline: true },
+          { name: 'Tracked Actions', value: String(issued.length), inline: true },
+          { name: 'Moderation Cases Received', value: String(received.length), inline: true },
+          { name: 'Recent Actions', value: truncate(recent.join('\n') || 'No tracked staff actions yet.', 1024), inline: false }
+        )
+        .setFooter({ text: "3C-tracked actions only; other bots' private staff records need to be imported." }).setTimestamp();
       return message.channel.send({ embeds: [embed] });
     }
 
@@ -868,13 +951,33 @@ client.on('messageCreate', async (message) => {
         .addFields(
           { name: 'Owner', value: owner ? owner.user.tag : 'Unknown', inline: true },
           { name: 'Members', value: String(message.guild.memberCount), inline: true },
-          { name: 'Humans', value: String(message.guild.members.cache.filter(m => !m.user.bot).size), inline: true },
-          { name: 'Bots', value: String(message.guild.members.cache.filter(m => m.user.bot).size), inline: true },
           { name: 'Channels', value: String(message.guild.channels.cache.size), inline: true },
           { name: 'Roles', value: String(message.guild.roles.cache.size), inline: true },
           { name: 'Boosts', value: String(message.guild.premiumSubscriptionCount || 0), inline: true },
           { name: 'Created', value: `<t:${Math.floor(message.guild.createdTimestamp / 1000)}:F>`, inline: false },
         ).setFooter({ text: `Server ID: ${message.guild.id}` });
+      return message.channel.send({ embeds: [e] });
+    }
+
+    // ROLE INFO — details vertically; permissions arranged in two columns.
+    if (cmd === 'roleinfo' || cmd === 'ri') {
+      const roleMention = message.mentions.roles.first();
+      const roleToken = args.find(x => /^\d{15,25}$/.test(x));
+      const role = roleMention || (roleToken ? message.guild.roles.cache.get(roleToken) : null) ||
+        (args.length ? findRole(message.guild, args.join(' ')) : null);
+      if (!role) return sendTemp(message.channel, `Usage: ${prefix}roleinfo @role (or provide a role ID/name)`, 6000);
+      const orderedRoles = [...message.guild.roles.cache.values()].sort((a, b) => b.position - a.position);
+      const positionFromTop = orderedRoles.findIndex(r => r.id === role.id) + 1;
+      const permissionNames = role.permissions.toArray().map(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' '));
+      const leftPermissions = permissionNames.filter((_, i) => i % 2 === 0);
+      const rightPermissions = permissionNames.filter((_, i) => i % 2 === 1);
+      const permissionText = list => truncate(list.join('\n') || 'No permissions', 1024);
+      const e = new EmbedBuilder().setColor(role.color || 0x5865F2).setTitle('🎭 Role Information')
+        .setDescription(`**Role:** ${role}\n**Role ID:** \`${role.id}\`\n**Hoisted:** ${role.hoist ? 'Yes' : 'No'}\n**Mentionable:** ${role.mentionable ? 'Yes' : 'No'}\n**Position from top:** ${positionFromTop} of ${orderedRoles.length}\n**Created:** <t:${Math.floor(role.createdTimestamp / 1000)}:F>`)
+        .addFields(
+          { name: 'Permissions · 1', value: permissionText(leftPermissions), inline: true },
+          { name: 'Permissions · 2', value: permissionText(rightPermissions), inline: true }
+        ).setFooter({ text: `Role ID: ${role.id}` });
       return message.channel.send({ embeds: [e] });
     }
 
@@ -1012,40 +1115,80 @@ client.on('messageCreate', async (message) => {
       saveData();
       return setupMessage;
     }
-    // CLOSE TICKET
+    // MULTI-TICKET PANEL — up to six independently configured ticket types on one public panel.
+    if (cmd === 'multipleticket') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      const groupId = `multi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'General Support 📬', panelDescription: 'Choose a ticket type below and our team will help you.', footerText: '3C Bot ~ Built for Rivals. United by 3C.', embedColor: 0x232428 };
+      const id = `mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+      data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null, tagIds: [], tagTypes: [], panelGroupId: groupId };
+      data.ticketPanels[groupId].ticketIds.push(id);
+      saveData();
+      const b = new ButtonBuilder().setCustomId(`ticket:setupopen:${id}`).setLabel('Set Up First Ticket Type').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
+      await safeDelete(message);
+      const setupMessage = await message.channel.send({ embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🎟️ Multi-Ticket Panel Setup').setDescription('Configure the first ticket type. You can add more buttons after it is created (up to 6 types per panel).')], components: [new ActionRowBuilder().addComponents(b)] });
+      data.tickets[id].setupMessageId = setupMessage.id;
+      saveData();
+      return setupMessage;
+    }
+    // CLOSE TICKET — message command accepts a reason; button opens the reason modal.
     if (cmd === 'closeticket' || cmd === 'ct') {
       const topic = message.channel.topic || '';
       if (!topic.startsWith('3C-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
-      const ownerId = topic.slice('3C-TICKET:'.length);
+      const topicParts = topic.split(':');
+      const ownerId = topicParts[1];
+      const ticketConfig = data.tickets[topicParts[2]];
+      const tagIds = ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
+      const tagTypes = ticketConfig?.tagTypes || (ticketConfig?.tagType ? [ticketConfig.tagType] : []);
+      const isSelectedUser = tagIds.some((id, i) => tagTypes[i] === 'user' && id === message.author.id);
+      const isSelectedRole = tagIds.some((id, i) => tagTypes[i] === 'role' && message.member.roles.cache.has(id));
       const isStaff = hasPerm(message.member, PermissionsBitField.Flags.ManageChannels);
-      if (message.author.id !== ownerId && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator or staff with Manage Channels can close this ticket.', 5000);
-      const modal = new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
-      const reason = new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000);
-      modal.addComponents(new ActionRowBuilder().addComponents(reason));
-      await message.delete().catch(()=>{});
-      return message.channel.send('🔒 Use the **Close Ticket** button to enter the close reason.').then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000));
+      if (message.author.id !== ownerId && !isSelectedUser && !isSelectedRole && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator, selected ticket staff, or staff with Manage Channels can close this ticket.', 5000);
+      const reason = args.join(' ').trim();
+      if (!reason) return sendTemp(message.channel, `Usage: ${prefix}closeticket <reason> — or click the **Close Ticket** button to enter a reason in a form.`, 7000);
+      const ticket = message.channel, category = ticket.parent;
+      if (isStaff) {
+        const stats = staffStatsFor(message.guild.id, message.author.id);
+        stats.ticketsClosed = (stats.ticketsClosed || 0) + 1;
+        stats.lastSeen = Date.now();
+        saveData();
+      }
+      await auditLog(message.guild, '🔒 Ticket Closed', `${ticket} was closed by ${message.author}.`, 0xED4245, [
+        { name: 'Closed By', value: `${message.author.tag} (${message.author.id})` },
+        { name: 'Ticket Creator', value: `<@${ownerId}> (${ownerId})` },
+        { name: 'Channel', value: `#${ticket.name} (${ticket.id})` },
+        { name: 'Category', value: category ? `${category.name} (${category.id})` : 'Unknown' },
+        { name: 'Close Reason', value: truncate(reason, 1000) }
+      ]);
+      await safeDelete(message);
+      await ticket.send(`🔒 Ticket closed by ${message.author}. **Reason:** ${reason}`);
+      setTimeout(() => ticket.delete(`Ticket closed by ${message.author.tag}: ${reason}`.slice(0, 512)).catch(() => {}), 1500);
+      return;
     }
     // SAY — use raw message content so spacing, newlines, #, @ and Discord formatting survive.
     if (cmd === 'say') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const rawSay = message.content.slice(prefix.length + cmd.length).trimStart();
-      if (!rawSay) return sendTemp(message.channel, `Usage: ${prefix}say <message>`, 5000);
+      const files = [...message.attachments.values()].map(a => a.url);
+      if (!rawSay && files.length === 0) return sendTemp(message.channel, `Usage: ${prefix}say <message> (you can also attach a photo)`, 5000);
       await safeDelete(message);
-      return message.channel.send({ content: rawSay, allowedMentions: { parse: [] } });
+      return message.channel.send({ content: rawSay || undefined, files, allowedMentions: { parse: [] } });
     }
 
-    // REPLY — reply/select a message first, then use !reply <message>.
+    // REPLY — reply/select a message first, then use !reply <message>; attachments are forwarded too.
     if (cmd === 'reply') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const rawReply = message.content.slice(prefix.length + cmd.length).trimStart();
+      const files = [...message.attachments.values()].map(a => a.url);
       const referenceId = message.reference?.messageId;
       if (!referenceId) return sendTemp(message.channel, `❌ First reply to the message you want to target, then use ${prefix}reply <message>.`, 6000);
-      if (!rawReply) return sendTemp(message.channel, `Usage: ${prefix}reply <message>`, 5000);
+      if (!rawReply && files.length === 0) return sendTemp(message.channel, `Usage: ${prefix}reply <message> (you can also attach a photo)`, 5000);
       const referenced = await message.channel.messages.fetch(referenceId).catch(() => null);
       if (!referenced) return sendTemp(message.channel, '❌ I could not find the selected message.', 5000);
       await safeDelete(message);
       return message.channel.send({
-        content: rawReply,
+        content: rawReply || undefined,
+        files,
         reply: { messageReference: referenced.id, failIfNotExists: false },
         allowedMentions: { parse: [] },
       });
@@ -1130,7 +1273,7 @@ client.on('messageCreate', async (message) => {
       const reportChannelId = data.reportLogs?.[message.guild.id];
       const reportChannel = reportChannelId ? message.guild.channels.cache.get(reportChannelId) : null;
       if (!reportChannel || !reportChannel.isTextBased()) {
-        return sendTemp(message.channel, `❌ Report logging is not set up. An admin should run ${prefix}setupreportlog #channel.`, 7000);
+        return sendTemp(message.channel, `❌ Report logging is not set up. An admin should run ${prefix}setupreport #channel.`, 7000);
       }
 
       const reportEmbed = new EmbedBuilder()
@@ -1152,6 +1295,9 @@ client.on('messageCreate', async (message) => {
       }
 
       const until = now + (7 * 60 * 1000);
+      if (!data.reportsReceived) data.reportsReceived = {};
+      const reportedKey = key(message.guild.id, target.id);
+      data.reportsReceived[reportedKey] = Number(data.reportsReceived[reportedKey] || 0) + 1;
       reportCooldowns.set(cooldownKey, until);
       data.reportCooldowns[cooldownKey] = until;
       saveData();
@@ -1159,27 +1305,20 @@ client.on('messageCreate', async (message) => {
       return message.channel.send('report successfully submitted').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
     }
 
-    // REPORT LOG SETUP — connect to an existing channel, or create 3C-User-Report when no channel is supplied.
-    if (cmd === 'setupreportlog') {
+    // REPORT LOG SETUP — connect to an existing channel only; never create a channel.
+    if (cmd === 'setupreportlog' || cmd === 'setupreport') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.Administrator)) {
-        return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupreportlog.`, 5000);
+        return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupreport or ${prefix}setupreportlog.`, 5000);
       }
 
       const mentionedChannel = message.mentions.channels.first();
       const requestedId = args.find(x => /^\d{15,25}$/.test(x));
-      let reportChannel = mentionedChannel ||
-        (requestedId ? message.guild.channels.cache.get(requestedId) : null);
-
-      if (!reportChannel) {
-        reportChannel = await message.guild.channels.create({
-          name: '3C-User-Report',
-          type: ChannelType.GuildText,
-          reason: '3C user report log setup',
-        }).catch(() => null);
-      }
+      const reportChannel = mentionedChannel ||
+        (requestedId ? message.guild.channels.cache.get(requestedId) : null) ||
+        (message.channel.type === ChannelType.GuildText ? message.channel : null);
 
       if (!reportChannel || !reportChannel.isTextBased() || reportChannel.guildId !== message.guild.id) {
-        return sendTemp(message.channel, `❌ Use ${prefix}setupreportlog #channel, or give me permission to create **3C-User-Report**.`, 7000);
+        return sendTemp(message.channel, `❌ Use ${prefix}setupreport #existing-channel (or run it inside the report channel). No channel will be created.`, 7000);
       }
 
       const me = message.guild.members.me;
@@ -1266,6 +1405,79 @@ client.on('messageCreate', async (message) => {
 
       return message.channel.send({ embeds: [e], components: [row] });
     }
+    if (cmd === 'embed') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return sendTemp(message.channel, 'You need Manage Messages to create embeds.', 6000);
+      }
+      const raw = message.content.slice(prefix.length + cmd.length).trimStart();
+      if (!raw) return sendTemp(message.channel, `Usage: ${prefix}embed #HEX <message text> (Markdown, new lines, mentions and attached photos supported).`, 8000);
+      const legacyParts = raw.split('|').map(part => part.trim());
+      const isLegacy = legacyParts.length >= 3 && /^#?[0-9a-fA-F]{6}$/.test(legacyParts[0]);
+      let colorText, embedText;
+      if (isLegacy) {
+        colorText = legacyParts[0];
+        embedText = `**${legacyParts[1]}**\n\n${legacyParts.slice(2, 4).filter(Boolean).join('\n\n')}`;
+      } else {
+        const match = raw.match(/^(#?[0-9a-fA-F]{6})(?:\s+([\s\S]*))?$/);
+        if (!match) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text>`, 7000);
+        colorText = match[1];
+        embedText = (match[2] || '').trim();
+      }
+      const color = colorText.replace(/^#/, '');
+      if (!/^[0-9a-fA-F]{6}$/.test(color)) return sendTemp(message.channel, 'Color must be a 6-digit hex code, like #0000FF.', 7000);
+      const attachment = message.attachments.find(a => a.contentType?.startsWith('image/'));
+      if (!embedText && !attachment) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text> (or attach an image)`, 7000);
+      const embed = new EmbedBuilder().setColor(parseInt(color, 16));
+      if (embedText) embed.setDescription(embedText.slice(0, 4096));
+      if (attachment) embed.setImage(attachment.url);
+      await message.channel.send({ embeds: [embed], allowedMentions: { parse: ['users', 'roles'] } });
+      return;
+    }
+
+    if (cmd === 'panelbutton') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return sendTemp(message.channel, 'You need Manage Messages to add panel buttons.', 6000);
+      }
+      const raw = body.slice(cmd.length).trim();
+      const parts = raw.split('|').map(part => part.trim());
+      if (parts.length < 3 || !/^\d{15,22}$/.test(parts[0]) || !parts[1] || !parts[2]) {
+        return sendTemp(message.channel, 'Usage: !panelbutton MESSAGE_ID | Button label | #channel or https://link', 9000);
+      }
+      const [messageId, label, destination] = parts;
+      let url = null;
+      const channelMention = destination.match(/^<#(\d{15,22})>$/);
+      const channelId = channelMention?.[1] || (/^\d{15,22}$/.test(destination) ? destination : null);
+      if (channelId) {
+        const channel = await message.guild.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased() || !channel.guild) {
+          return sendTemp(message.channel, 'I could not find that text channel in this server.', 7000);
+        }
+        url = `https://discord.com/channels/${message.guild.id}/${channel.id}`;
+      } else if (/^https:\/\/\S+$/i.test(destination)) {
+        url = destination;
+      } else {
+        return sendTemp(message.channel, 'Use a channel mention/ID or a full https:// URL.', 7000);
+      }
+
+      const targetMessage = await message.channel.messages.fetch(messageId).catch(() => null);
+      if (!targetMessage || targetMessage.author.id !== client.user.id) {
+        return sendTemp(message.channel, 'I can only add buttons to a message sent by this bot in the same channel.', 8000);
+      }
+      const rows = targetMessage.components.map(row => ActionRowBuilder.from(row));
+      let row = rows[rows.length - 1];
+      if (!row || row.components.length >= 5) {
+        if (rows.length >= 5) return sendTemp(message.channel, 'Discord allows up to 25 buttons per message.', 7000);
+        row = new ActionRowBuilder();
+        rows.push(row);
+      }
+      row.addComponents(new ButtonBuilder()
+        .setLabel(label.slice(0, 80))
+        .setStyle(ButtonStyle.Link)
+        .setURL(url));
+      await targetMessage.edit({ components: rows });
+      return sendTemp(message.channel, `Added button: ${label.slice(0, 80)}`, 5000);
+    }
+
     if (cmd === 'help') {
       const wanted = (args[0] || '').toLowerCase().replace(prefix, '');
       const found = commandList(prefix).find(([a]) => a.toLowerCase().replaceAll(prefix, '').split(/[ /]/)[0] === wanted);
@@ -1370,6 +1582,10 @@ client.on('interactionCreate', async (interaction) => {
       config.tagId=tags[0].id;
       config.tagType=tags[0].type;
       saveData();
+      if(config.categoryId){
+        const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
+        return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now customize the public button label, emoji, and color.`,embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
+      }
       return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now select the Ticket Category.`,embeds:[],components:interaction.message.components});
     }
     if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:setupcategory:')) {
@@ -1380,20 +1596,168 @@ client.on('interactionCreate', async (interaction) => {
       if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ Select an existing Discord category.',ephemeral:true});
       config.categoryId=category.id; saveData();
       if(!config.tagId||!config.tagType) return interaction.update({content:'✅ Category saved! Now select the Role/User to Tag.',embeds:[],components:interaction.message.components});
-      const open=new ButtonBuilder().setCustomId(`ticket:create:${id}`).setLabel('Open Ticket').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
-      const embed=new EmbedBuilder().setColor(config.embedColor).setTitle(config.title).setDescription(config.description);
-      const panelMessage=await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
-      config.panelChannelId=interaction.channel.id;
-      config.panelMessageId=panelMessage.id;
-      saveData();
-      await interaction.update({content:'✅ Ticket panel created! The panel is now visible to everyone in this channel.',embeds:[],components:[]});
-      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category.`,0x5865F2);
+      const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
+      return interaction.update({content:'✅ Ticket category saved! Now customize the public button label, emoji, and color.',embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:buttonsetup:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`ticket:buttonmodal:${id}`).setTitle('Customize Ticket Button');
+      const f=(field,label,placeholder,required,max)=>new TextInputBuilder().setCustomId(field).setLabel(label).setPlaceholder(placeholder).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(f('ticket:buttonlabel','Button label','Open Ticket',true,80)),
+        new ActionRowBuilder().addComponents(f('ticket:buttonemoji','Button emoji','🎟️',false,100)),
+        new ActionRowBuilder().addComponents(f('ticket:buttoncolor','Button color','Blue, Grey, Green, or Red',true,10))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:buttonmodal:')) {
+      const id=interaction.customId.split(':')[2], config=data.tickets[id];
+      if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
+      const label=interaction.fields.getTextInputValue('ticket:buttonlabel').trim();
+      const emoji=interaction.fields.getTextInputValue('ticket:buttonemoji').trim();
+      const colorText=interaction.fields.getTextInputValue('ticket:buttoncolor').trim().toLowerCase();
+      const styles={blue:ButtonStyle.Primary,grey:ButtonStyle.Secondary,gray:ButtonStyle.Secondary,green:ButtonStyle.Success,red:ButtonStyle.Danger};
+      if(!label||!styles[colorText]) return interaction.reply({content:'❌ Enter a button label and choose Blue, Grey, Green, or Red.',ephemeral:true});
+      config.buttonLabel=label;
+      config.buttonEmoji=emoji||null;
+      config.buttonStyleName=colorText==='gray'?'grey':colorText;
+      config.buttonStyle=styles[colorText];
+      saveData();
+      const buildTicketButton = ticketId => {
+        const ticketConfig = data.tickets[ticketId];
+        const button = new ButtonBuilder().setCustomId(`ticket:create:${ticketId}`).setLabel(ticketConfig.buttonLabel || 'Open Ticket').setStyle(ticketConfig.buttonStyle || ButtonStyle.Primary);
+        if(ticketConfig.buttonEmoji) button.setEmoji(ticketConfig.buttonEmoji);
+        return button;
+      };
+      const buildTicketEmbed = ticketId => {
+        const ticketConfig = data.tickets[ticketId];
+        const parentGroup = ticketConfig.panelGroupId ? data.ticketPanels[ticketConfig.panelGroupId] : null;
+        const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
+        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3C Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
+        return embed;
+      };
+      config.panelChannelId=interaction.channel.id;
+      const group = config.panelGroupId ? data.ticketPanels[config.panelGroupId] : null;
+      let panelMessage;
+      if(group) {
+        if(!group.ticketIds.includes(id)) group.ticketIds.push(id);
+        const configuredIds = group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).slice(0,6);
+        const panelEmbed = new EmbedBuilder()
+          .setColor(group.embedColor ?? 0x232428)
+          .setTitle(group.panelTitle || 'General Support 📬')
+          .setDescription(group.panelDescription || 'Choose a ticket type below and our team will help you.')
+          .setFooter({ text: group.footerText || '3C Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
+        const panelButtons = configuredIds.map(buildTicketButton);
+        const panelRows = [];
+        for (let i = 0; i < panelButtons.length; i += 5) panelRows.push(new ActionRowBuilder().addComponents(...panelButtons.slice(i, i + 5)));
+        if(!panelButtons.length) return interaction.reply({content:'❌ No configured ticket types found.',ephemeral:true});
+        if(group.panelMessageId) {
+          const panelChannel = await client.channels.fetch(group.panelChannelId).catch(()=>null);
+          panelMessage = panelChannel?.messages ? await panelChannel.messages.fetch(group.panelMessageId).catch(()=>null) : null;
+        }
+        if(panelMessage) await panelMessage.edit({embeds:[panelEmbed],components:panelRows});
+        else {
+          const panelChannel = await client.channels.fetch(group.panelChannelId).catch(()=>null);
+          if(!panelChannel?.isTextBased()) return interaction.reply({content:'❌ I could not find the channel where this multi-ticket panel should be posted.',ephemeral:true});
+          panelMessage = await panelChannel.send({embeds:[panelEmbed],components:panelRows});
+          group.panelMessageId = panelMessage.id;
+        }
+        group.panelChannelId = panelMessage.channelId;
+        for(const ticketId of configuredIds) { data.tickets[ticketId].panelMessageId = panelMessage.id; data.tickets[ticketId].panelChannelId = panelMessage.channelId; }
+        saveData();
+      } else {
+        const open=buildTicketButton(id);
+        const embed=buildTicketEmbed(id);
+        panelMessage=await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
+        config.panelMessageId=panelMessage.id;
+        saveData();
+      }
+      const configuredCount = group ? group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).length : 5;
+      const editPanel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(group ? `ticket:panelsetup:${config.panelGroupId}` : `ticket:panelsetup:${id}`).setLabel('Edit Panel Title, Description & Footer').setEmoji('📝').setStyle(ButtonStyle.Secondary));
+      const addMore = group && configuredCount < 6 ? new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket:addtype:${config.panelGroupId}`).setLabel('Add Another Ticket Type').setEmoji('➕').setStyle(ButtonStyle.Secondary)) : null;
+      await interaction.reply({content:`✅ Ticket panel created/updated! Button: **${label}** · Color: **${config.buttonStyleName}**.${group?' You can edit the shared embed or add another ticket type below.':' You can edit the embed footer below.'}`,components:addMore?[editPanel,addMore]:[editPanel],ephemeral:true});
+      return auditLog(interaction.guild,'🎟️ Ticket Panel Configured',`${interaction.user} configured **${config.name}** with a private ticket category and a ${config.buttonStyleName} button.`,0x5865F2);
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:panelsetup:')) {
+      const panelId = interaction.customId.split(':')[2];
+      const group = data.ticketPanels[panelId];
+      const config = data.tickets[panelId];
+      const ownerId = group?.createdBy || config?.createdBy;
+      const guildId = group?.guildId || config?.guildId;
+      if (!ownerId || guildId !== interaction.guildId) return interaction.reply({ content: '❌ This panel setup no longer exists.', ephemeral: true });
+      if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
+      const currentTitle = group?.panelTitle || config?.title || 'General Support 📬';
+      const currentDescription = group?.panelDescription || config?.description || 'Choose a ticket type below and our team will help you.';
+      const currentFooter = group?.footerText || config?.footerText || '3C Bot ~ Built for Rivals. United by 3C.';
+      const modal = new ModalBuilder().setCustomId(`ticket:panelmodal:${panelId}`).setTitle('Edit Ticket Panel Embed');
+      const f = (field, label, value, style, max) => new TextInputBuilder().setCustomId(field).setLabel(label).setValue(String(value).slice(0,max)).setStyle(style).setRequired(true).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(f('panel:title', 'Panel title', currentTitle, TextInputStyle.Short, 256)),
+        new ActionRowBuilder().addComponents(f('panel:description', 'Panel description', currentDescription, TextInputStyle.Paragraph, 1000)),
+        new ActionRowBuilder().addComponents(f('panel:footer', 'Footer text', currentFooter, TextInputStyle.Short, 200))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:panelmodal:')) {
+      const panelId = interaction.customId.split(':')[2];
+      const group = data.ticketPanels[panelId];
+      const config = data.tickets[panelId];
+      const ownerId = group?.createdBy || config?.createdBy;
+      const guildId = group?.guildId || config?.guildId;
+      if (!ownerId || guildId !== interaction.guildId) return interaction.reply({ content: '❌ This panel setup no longer exists.', ephemeral: true });
+      if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
+      const title = interaction.fields.getTextInputValue('panel:title').trim();
+      const description = interaction.fields.getTextInputValue('panel:description').trim();
+      const footerText = interaction.fields.getTextInputValue('panel:footer').trim();
+      if (!title || !description || !footerText) return interaction.reply({ content: '❌ Title, description, and footer text cannot be blank.', ephemeral: true });
+      if (group) {
+        group.panelTitle = title;
+        group.panelDescription = description;
+        group.footerText = footerText;
+      } else {
+        config.title = title;
+        config.description = description;
+        config.footerText = footerText;
+      }
+      saveData();
+      let panelMessage = null;
+      const channelId = group?.panelChannelId || config.panelChannelId;
+      const messageId = group?.panelMessageId || config.panelMessageId;
+      const channel = channelId ? await client.channels.fetch(channelId).catch(() => null) : null;
+      if (channel?.messages && messageId) panelMessage = await channel.messages.fetch(messageId).catch(() => null);
+      if (panelMessage) {
+        const embed = new EmbedBuilder().setColor(group?.embedColor ?? config?.embedColor ?? 0x232428)
+          .setTitle(title).setDescription(description)
+          .setFooter({ text: footerText, iconURL: client.user.displayAvatarURL() });
+        await panelMessage.edit({ embeds: [embed] });
+      }
+      return interaction.reply({ content: '✅ Panel title, description, and footer saved. The bot profile picture is automatically shown beside the footer.', ephemeral: true });
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:addtype:')) {
+      const groupId=interaction.customId.split(':')[2], group=data.ticketPanels[groupId];
+      if(!group||group.guildId!==interaction.guildId) return interaction.reply({content:'❌ This multi-ticket panel setup no longer exists.',ephemeral:true});
+      if(interaction.user.id!==group.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can add ticket types.',ephemeral:true});
+      const configuredCount=group.ticketIds.filter(ticketId=>data.tickets[ticketId]?.buttonLabel&&data.tickets[ticketId]?.categoryId).length;
+      if(configuredCount>=6) return interaction.reply({content:'❌ This panel already has 6 ticket types, the current limit.',ephemeral:true});
+      const id=`mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+      data.tickets[id]={guildId:group.guildId,createdBy:group.createdBy,panelChannelId:group.panelChannelId,panelMessageId:group.panelMessageId,categoryId:null,name:'ticket',color:0x5865F2,title:'Create Ticket',embedColor:0x5865F2,tagId:null,tagType:null,tagIds:[],tagTypes:[],panelGroupId:groupId};
+      group.ticketIds.push(id);
+      saveData();
+      const setupButton=new ButtonBuilder().setCustomId(`ticket:setupopen:${id}`).setLabel('Configure New Ticket Type').setEmoji('🎟️').setStyle(ButtonStyle.Primary);
+      return interaction.reply({content:'Configure the next ticket type. It will be added to the same public panel with its own embed, category, tags, button label, emoji, and color.',components:[new ActionRowBuilder().addComponents(setupButton)],ephemeral:true});
+    }
     if (interaction.isButton() && interaction.customId.startsWith('ticket:create:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
-      const existing=interaction.guild.channels.cache.find(c=>c.topic===`3C-TICKET:${interaction.user.id}`);
+      const existing=interaction.guild.channels.cache.find(c=>{ if(c.type!==ChannelType.GuildText||!c.topic?.startsWith('3C-TICKET:')) return false; const parts=c.topic.split(':'); return parts[1]===interaction.user.id && (!parts[2] || parts[2]===id); });
       if(existing) return interaction.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
       const category=interaction.guild.channels.cache.get(config.categoryId);
       if (!config.tagIds) config.tagIds = config.tagId ? [config.tagId] : [];
@@ -1403,14 +1767,18 @@ client.on('interactionCreate', async (interaction) => {
       const safeUser=String(interaction.user.username||interaction.user.id).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,25)||interaction.user.id;
       const safeName=`${safeBase}-ticket-${safeUser}`.slice(0,95);
       let channel;
-      try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}`,permissionOverwrites:[
+      try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}:${id}`,permissionOverwrites:[
         {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
         {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
-        ...((config.tagIds|| (config.tagId?[config.tagId]:[])).map((tagId,i)=>({id:tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}))),
+        ...((config.tagIds || (config.tagId ? [config.tagId] : [])).filter(tagId => tagId && tagId !== interaction.user.id && tagId !== client.user.id && tagId !== interaction.guild.roles.everyone.id).map((tagId, i) => {
+          const savedType = config.tagTypes?.[i] || (config.tagIds?.length === 1 ? config.tagType : null);
+          const isRole = savedType ? savedType === 'role' : interaction.guild.roles.cache.has(tagId);
+          return { id: tagId, type: isRole ? OverwriteType.Role : OverwriteType.Member, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] };
+        })),
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.title});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3C Bot ~ Built for Rivals. United by 3C.', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
       const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
@@ -1423,8 +1791,14 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isButton() && interaction.customId==='ticket:close') {
       const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
-      const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
-      if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ Only the ticket creator or Manage Channels staff can close this ticket.',ephemeral:true});
+      const topicParts=topic.split(':');
+      const ownerId=topicParts[1], ticketConfig=data.tickets[topicParts[2]];
+      const tagIds=ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
+      const tagTypes=ticketConfig?.tagTypes || (ticketConfig?.tagType ? [ticketConfig.tagType] : []);
+      const isSelectedUser=tagIds.some((id,i)=>tagTypes[i]==='user'&&id===interaction.user.id);
+      const isSelectedRole=tagIds.some((id,i)=>tagTypes[i]==='role'&&interaction.member?.roles?.cache?.has(id));
+      const staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      if(interaction.user.id!==ownerId&&!isSelectedUser&&!isSelectedRole&&!staff) return interaction.reply({content:'❌ Only the ticket creator, selected ticket staff, or Manage Channels staff can close this ticket.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
       modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000)));
       return interaction.showModal(modal);
@@ -1432,9 +1806,17 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId==='ticket:closemodal') {
       const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
-      const ownerId=topic.slice('3C-TICKET:'.length), staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
-      if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ You cannot close this ticket.',ephemeral:true});
-      const reason=interaction.fields.getTextInputValue('ticket:closereason').trim(), ticket=interaction.channel, category=ticket.parent;
+      const topicParts=topic.split(':');
+      const ownerId=topicParts[1], ticketConfig=data.tickets[topicParts[2]];
+      const tagIds=ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
+      const tagTypes=ticketConfig?.tagTypes || (ticketConfig?.tagType ? [ticketConfig.tagType] : []);
+      const isSelectedUser=tagIds.some((id,i)=>tagTypes[i]==='user'&&id===interaction.user.id);
+      const isSelectedRole=tagIds.some((id,i)=>tagTypes[i]==='role'&&interaction.member?.roles?.cache?.has(id));
+      const staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      if(interaction.user.id!==ownerId&&!isSelectedUser&&!isSelectedRole&&!staff) return interaction.reply({content:'❌ Only the ticket creator, selected ticket staff, or Manage Channels staff can close this ticket.',ephemeral:true});
+      const reason=interaction.fields.getTextInputValue('ticket:closereason').trim();
+      if(!reason) return interaction.reply({content:'❌ Please enter a close reason.',ephemeral:true});
+      const ticket=interaction.channel, category=ticket.parent;
       if (staff) {
         const closerStats = staffStatsFor(interaction.guild.id, interaction.user.id);
         closerStats.ticketsClosed = (closerStats.ticketsClosed || 0) + 1;
