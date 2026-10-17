@@ -1770,7 +1770,11 @@ client.on('interactionCreate', async (interaction) => {
       try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}:${id}`,permissionOverwrites:[
         {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
         {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
-        ...((config.tagIds|| (config.tagId?[config.tagId]:[])).map((tagId,i)=>({id:tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}))),
+        ...((config.tagIds || (config.tagId ? [config.tagId] : [])).filter(tagId => tagId && tagId !== interaction.user.id && tagId !== client.user.id && tagId !== interaction.guild.roles.everyone.id).map((tagId, i) => {
+          const savedType = config.tagTypes?.[i] || (config.tagIds?.length === 1 ? config.tagType : null);
+          const isRole = savedType ? savedType === 'role' : interaction.guild.roles.cache.has(tagId);
+          return { id: tagId, type: isRole ? OverwriteType.Role : OverwriteType.Member, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] };
+        })),
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
