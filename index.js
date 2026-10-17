@@ -1446,7 +1446,7 @@ client.on('messageCreate', async (message) => {
         if (!channel || !channel.isTextBased() || !channel.guild) {
           return sendTemp(message.channel, 'I could not find that text channel in this server.', 7000);
         }
-        url = \`https://discord.com/channels/\${message.guild.id}/\${channel.id}\`;
+        url = `https://discord.com/channels/${message.guild.id}/${channel.id}`;
       } else if (/^https:\/\/\S+$/i.test(destination)) {
         url = destination;
       } else {
@@ -1469,7 +1469,7 @@ client.on('messageCreate', async (message) => {
         .setStyle(ButtonStyle.Link)
         .setURL(url));
       await targetMessage.edit({ components: rows });
-      return sendTemp(message.channel, \`Added button: \${label.slice(0, 80)}\`, 5000);
+      return sendTemp(message.channel, `Added button: ${label.slice(0, 80)}`, 5000);
     }
 
     if (cmd === 'help') {
