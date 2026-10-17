@@ -54,6 +54,7 @@ const defaultData = {
   auditChannels: {},
   reportLogs: {},
   reportCooldowns: {},
+  reportsReceived: {},
   staffStats: {},
   staffCases: {},
 };
@@ -321,9 +322,10 @@ function commandList(prefix) {
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
     [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
     [`${prefix}serverinfo`, 'Show server statistics and icon.'],
+    [`${prefix}roleinfo @role`, 'Show role details and permissions in two columns.'],
     [`${prefix}checkuser @user`, 'Show a normal member profile and tracked warnings received (Level 30+ role).'],
     [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
-    [`${prefix}embed #HEX | title | description | footer`, 'Create a custom embed; attach an image to include it.'],
+    [`${prefix}embed #HEX <message>`, 'Send multiline text, Markdown and mentions inside a custom-color embed; attach a photo to include it.'],
     [`${prefix}panelbutton <messageID> | label | #channel or URL`, 'Add a button to one of your bot messages.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
@@ -345,7 +347,7 @@ function commandList(prefix) {
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
     [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
     [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
-    [`${prefix}setupreportlog #channel`, 'Connect the 3C User Report log to an existing channel.'],
+    [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3C User Report log to an existing channel.'],
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
@@ -433,7 +435,7 @@ async function recoverTicketPanels() {
             if (overwriteId === everyoneId || overwriteId === meId) continue;
             if (overwrite.type === OverwriteType.Role) recoveredTags.push({ id: overwriteId, type: 'role' });
             if (overwrite.type === OverwriteType.Member) {
-              const ownerId = existingTicket.topic.slice('3C-TICKET:'.length);
+              const ownerId = existingTicket.topic.split(':')[1];
               if (overwriteId !== ownerId) recoveredTags.push({ id: overwriteId, type: 'user' });
             }
           }
@@ -799,7 +801,8 @@ client.on('messageCreate', async (message) => {
           { name: 'Staff Status', value: targetMember && isStaffMember(targetMember) ? 'Staff member' : 'Not staff', inline: true },
           { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
           { name: 'Warnings Received (3C tracked)', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
-          { name: 'Moderation Cases Received (tracked)', value: String(received.length), inline: true }
+          { name: 'Moderation Cases Received (tracked)', value: String(received.length), inline: true },
+          { name: 'Reports Received', value: String(Number(data.reportsReceived?.[key(message.guild.id, targetUser.id)] || 0)), inline: true }
         )
         .setFooter({ text: 'Warning history from other bots is only available if their logs/data are imported.' }).setTimestamp();
       return message.channel.send({ embeds: [embed] });
@@ -948,13 +951,33 @@ client.on('messageCreate', async (message) => {
         .addFields(
           { name: 'Owner', value: owner ? owner.user.tag : 'Unknown', inline: true },
           { name: 'Members', value: String(message.guild.memberCount), inline: true },
-          { name: 'Humans', value: String(message.guild.members.cache.filter(m => !m.user.bot).size), inline: true },
-          { name: 'Bots', value: String(message.guild.members.cache.filter(m => m.user.bot).size), inline: true },
           { name: 'Channels', value: String(message.guild.channels.cache.size), inline: true },
           { name: 'Roles', value: String(message.guild.roles.cache.size), inline: true },
           { name: 'Boosts', value: String(message.guild.premiumSubscriptionCount || 0), inline: true },
           { name: 'Created', value: `<t:${Math.floor(message.guild.createdTimestamp / 1000)}:F>`, inline: false },
         ).setFooter({ text: `Server ID: ${message.guild.id}` });
+      return message.channel.send({ embeds: [e] });
+    }
+
+    // ROLE INFO — details vertically; permissions arranged in two columns.
+    if (cmd === 'roleinfo' || cmd === 'ri') {
+      const roleMention = message.mentions.roles.first();
+      const roleToken = args.find(x => /^\d{15,25}$/.test(x));
+      const role = roleMention || (roleToken ? message.guild.roles.cache.get(roleToken) : null) ||
+        (args.length ? findRole(message.guild, args.join(' ')) : null);
+      if (!role) return sendTemp(message.channel, `Usage: ${prefix}roleinfo @role (or provide a role ID/name)`, 6000);
+      const orderedRoles = [...message.guild.roles.cache.values()].sort((a, b) => b.position - a.position);
+      const positionFromTop = orderedRoles.findIndex(r => r.id === role.id) + 1;
+      const permissionNames = role.permissions.toArray().map(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' '));
+      const leftPermissions = permissionNames.filter((_, i) => i % 2 === 0);
+      const rightPermissions = permissionNames.filter((_, i) => i % 2 === 1);
+      const permissionText = list => truncate(list.join('\\n') || 'No permissions', 1024);
+      const e = new EmbedBuilder().setColor(role.color || 0x5865F2).setTitle('🎭 Role Information')
+        .setDescription(`**Role:** ${role}\\n**Role ID:** \`${role.id}\`\\n**Hoisted:** ${role.hoist ? 'Yes' : 'No'}\\n**Mentionable:** ${role.mentionable ? 'Yes' : 'No'}\\n**Position from top:** ${positionFromTop} of ${orderedRoles.length}\\n**Created:** <t:${Math.floor(role.createdTimestamp / 1000)}:F>`)
+        .addFields(
+          { name: 'Permissions · 1', value: permissionText(leftPermissions), inline: true },
+          { name: 'Permissions · 2', value: permissionText(rightPermissions), inline: true }
+        ).setFooter({ text: `Role ID: ${role.id}` });
       return message.channel.send({ embeds: [e] });
     }
 
@@ -1108,18 +1131,33 @@ client.on('messageCreate', async (message) => {
       saveData();
       return setupMessage;
     }
-    // CLOSE TICKET
+    // CLOSE TICKET — message command accepts a reason; button opens the reason modal.
     if (cmd === 'closeticket' || cmd === 'ct') {
       const topic = message.channel.topic || '';
       if (!topic.startsWith('3C-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
-      const ownerId = topic.slice('3C-TICKET:'.length);
+      const ownerId = topic.split(':')[1];
       const isStaff = hasPerm(message.member, PermissionsBitField.Flags.ManageChannels);
       if (message.author.id !== ownerId && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator or staff with Manage Channels can close this ticket.', 5000);
-      const modal = new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
-      const reason = new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000);
-      modal.addComponents(new ActionRowBuilder().addComponents(reason));
-      await message.delete().catch(()=>{});
-      return message.channel.send('🔒 Use the **Close Ticket** button to enter the close reason.').then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000));
+      const reason = args.join(' ').trim();
+      if (!reason) return sendTemp(message.channel, `Usage: ${prefix}closeticket <reason> — or click the **Close Ticket** button to enter a reason in a form.`, 7000);
+      const ticket = message.channel, category = ticket.parent;
+      if (isStaff) {
+        const stats = staffStatsFor(message.guild.id, message.author.id);
+        stats.ticketsClosed = (stats.ticketsClosed || 0) + 1;
+        stats.lastSeen = Date.now();
+        saveData();
+      }
+      await auditLog(message.guild, '🔒 Ticket Closed', `${ticket} was closed by ${message.author}.`, 0xED4245, [
+        { name: 'Closed By', value: `${message.author.tag} (${message.author.id})` },
+        { name: 'Ticket Creator', value: `<@${ownerId}> (${ownerId})` },
+        { name: 'Channel', value: `#${ticket.name} (${ticket.id})` },
+        { name: 'Category', value: category ? `${category.name} (${category.id})` : 'Unknown' },
+        { name: 'Close Reason', value: truncate(reason, 1000) }
+      ]);
+      await safeDelete(message);
+      await ticket.send(`🔒 Ticket closed by ${message.author}. **Reason:** ${reason}`);
+      setTimeout(() => ticket.delete(`Ticket closed by ${message.author.tag}: ${reason}`.slice(0, 512)).catch(() => {}), 1500);
+      return;
     }
     // SAY — use raw message content so spacing, newlines, #, @ and Discord formatting survive.
     if (cmd === 'say') {
@@ -1229,7 +1267,7 @@ client.on('messageCreate', async (message) => {
       const reportChannelId = data.reportLogs?.[message.guild.id];
       const reportChannel = reportChannelId ? message.guild.channels.cache.get(reportChannelId) : null;
       if (!reportChannel || !reportChannel.isTextBased()) {
-        return sendTemp(message.channel, `❌ Report logging is not set up. An admin should run ${prefix}setupreportlog #channel.`, 7000);
+        return sendTemp(message.channel, `❌ Report logging is not set up. An admin should run ${prefix}setupreport #channel.`, 7000);
       }
 
       const reportEmbed = new EmbedBuilder()
@@ -1251,6 +1289,9 @@ client.on('messageCreate', async (message) => {
       }
 
       const until = now + (7 * 60 * 1000);
+      if (!data.reportsReceived) data.reportsReceived = {};
+      const reportedKey = key(message.guild.id, target.id);
+      data.reportsReceived[reportedKey] = Number(data.reportsReceived[reportedKey] || 0) + 1;
       reportCooldowns.set(cooldownKey, until);
       data.reportCooldowns[cooldownKey] = until;
       saveData();
@@ -1258,27 +1299,20 @@ client.on('messageCreate', async (message) => {
       return message.channel.send('report successfully submitted').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
     }
 
-    // REPORT LOG SETUP — connect to an existing channel, or create 3C-User-Report when no channel is supplied.
-    if (cmd === 'setupreportlog') {
+    // REPORT LOG SETUP — connect to an existing channel only; never create a channel.
+    if (cmd === 'setupreportlog' || cmd === 'setupreport') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.Administrator)) {
         return sendTemp(message.channel, `❌ Only members with **Administrator** permission can use ${prefix}setupreportlog.`, 5000);
       }
 
       const mentionedChannel = message.mentions.channels.first();
       const requestedId = args.find(x => /^\d{15,25}$/.test(x));
-      let reportChannel = mentionedChannel ||
-        (requestedId ? message.guild.channels.cache.get(requestedId) : null);
-
-      if (!reportChannel) {
-        reportChannel = await message.guild.channels.create({
-          name: '3C-User-Report',
-          type: ChannelType.GuildText,
-          reason: '3C user report log setup',
-        }).catch(() => null);
-      }
+      const reportChannel = mentionedChannel ||
+        (requestedId ? message.guild.channels.cache.get(requestedId) : null) ||
+        (message.channel.type === ChannelType.GuildText ? message.channel : null);
 
       if (!reportChannel || !reportChannel.isTextBased() || reportChannel.guildId !== message.guild.id) {
-        return sendTemp(message.channel, `❌ Use ${prefix}setupreportlog #channel, or give me permission to create **3C-User-Report**.`, 7000);
+        return sendTemp(message.channel, `❌ Use ${prefix}setupreport #existing-channel (or run it inside the report channel). No channel will be created.`, 7000);
       }
 
       const me = message.guild.members.me;
@@ -1369,27 +1403,28 @@ client.on('messageCreate', async (message) => {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
         return sendTemp(message.channel, 'You need Manage Messages to create embeds.', 6000);
       }
-      const raw = body.slice(cmd.length).trim();
-      const parts = raw.split('|').map(part => part.trim());
-      if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) {
-        return sendTemp(message.channel, 'Usage: !embed #HEX | title | description | footer | imageURL — you can also attach a photo to your command.', 10000);
+      const raw = message.content.slice(prefix.length + cmd.length).trimStart();
+      if (!raw) return sendTemp(message.channel, `Usage: ${prefix}embed #HEX <message text> (Markdown, new lines, mentions and attached photos supported).`, 8000);
+      const legacyParts = raw.split('|').map(part => part.trim());
+      const isLegacy = legacyParts.length >= 3 && /^#?[0-9a-fA-F]{6}$/.test(legacyParts[0]);
+      let colorText, embedText;
+      if (isLegacy) {
+        colorText = legacyParts[0];
+        embedText = `**${legacyParts[1]}**\\n\\n${legacyParts.slice(2, 4).filter(Boolean).join('\\n\\n')}`;
+      } else {
+        const match = raw.match(/^(#?[0-9a-fA-F]{6})(?:\\s+([\\s\\S]*))?$/);
+        if (!match) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text>`, 7000);
+        colorText = match[1];
+        embedText = (match[2] || '').trim();
       }
-      const color = parts[0].replace(/^#/, '');
-      if (!/^[0-9a-fA-F]{6}$/.test(color)) {
-        return sendTemp(message.channel, 'Color must be a 6-digit hex code, like #32CD32.', 7000);
-      }
-      const embed = new EmbedBuilder()
-        .setColor(parseInt(color, 16))
-        .setTitle(parts[1].slice(0, 256))
-        .setDescription(parts[2].slice(0, 4096));
-      if (parts[3]) embed.setFooter({ text: parts[3].slice(0, 2048), iconURL: client.user.displayAvatarURL() });
+      const color = colorText.replace(/^#/, '');
+      if (!/^[0-9a-fA-F]{6}$/.test(color)) return sendTemp(message.channel, 'Color must be a 6-digit hex code, like #0000FF.', 7000);
       const attachment = message.attachments.find(a => a.contentType?.startsWith('image/'));
-      const imageUrl = parts[4] || attachment?.url;
-      if (imageUrl && /^https?:\/\/\S+$/i.test(imageUrl)) embed.setImage(imageUrl);
-      await message.channel.send({
-        embeds: [embed],
-        allowedMentions: { parse: ['users', 'roles'] },
-      });
+      if (!embedText && !attachment) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text> (or attach an image)`, 7000);
+      const embed = new EmbedBuilder().setColor(parseInt(color, 16));
+      if (embedText) embed.setDescription(embedText.slice(0, 4096));
+      if (attachment) embed.setImage(attachment.url);
+      await message.channel.send({ embeds: [embed], allowedMentions: { parse: ['users', 'roles'] } });
       return;
     }
 
@@ -1716,7 +1751,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith('ticket:create:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
-      const existing=interaction.guild.channels.cache.find(c=>c.topic===`3C-TICKET:${interaction.user.id}`);
+      const existing=interaction.guild.channels.cache.find(c=>{ if(c.type!==ChannelType.GuildText||!c.topic?.startsWith('3C-TICKET:')) return false; const parts=c.topic.split(':'); return parts[1]===interaction.user.id && (!parts[2] || parts[2]===id); });
       if(existing) return interaction.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
       const category=interaction.guild.channels.cache.get(config.categoryId);
       if (!config.tagIds) config.tagIds = config.tagId ? [config.tagId] : [];
@@ -1726,7 +1761,7 @@ client.on('interactionCreate', async (interaction) => {
       const safeUser=String(interaction.user.username||interaction.user.id).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,25)||interaction.user.id;
       const safeName=`${safeBase}-ticket-${safeUser}`.slice(0,95);
       let channel;
-      try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}`,permissionOverwrites:[
+      try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}:${id}`,permissionOverwrites:[
         {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
         {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
         ...((config.tagIds|| (config.tagId?[config.tagId]:[])).map((tagId,i)=>({id:tagId,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]}))),
