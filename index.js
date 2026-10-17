@@ -323,6 +323,8 @@ function commandList(prefix) {
     [`${prefix}serverinfo`, 'Show server statistics and icon.'],
     [`${prefix}checkuser @user`, 'Show a normal member profile and tracked warnings received (Level 30+ role).'],
     [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
+    [`${prefix}embed #HEX | title | description | footer`, 'Create a custom embed; attach an image to include it.'],
+    [`${prefix}panelbutton <messageID> | label | #channel or URL`, 'Add a button to one of your bot messages.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
     [`${prefix}slowmode <time|off>`, 'Set channel slowmode or turn it off, e.g. 10s, 5m, 1h, off.'],
@@ -1363,6 +1365,78 @@ client.on('messageCreate', async (message) => {
 
       return message.channel.send({ embeds: [e], components: [row] });
     }
+    if (cmd === 'embed') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return sendTemp(message.channel, 'You need Manage Messages to create embeds.', 6000);
+      }
+      const raw = body.slice(cmd.length).trim();
+      const parts = raw.split('|').map(part => part.trim());
+      if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) {
+        return sendTemp(message.channel, 'Usage: !embed #HEX | title | description | footer | imageURL — you can also attach a photo to your command.', 10000);
+      }
+      const color = parts[0].replace(/^#/, '');
+      if (!/^[0-9a-fA-F]{6}$/.test(color)) {
+        return sendTemp(message.channel, 'Color must be a 6-digit hex code, like #32CD32.', 7000);
+      }
+      const embed = new EmbedBuilder()
+        .setColor(parseInt(color, 16))
+        .setTitle(parts[1].slice(0, 256))
+        .setDescription(parts[2].slice(0, 4096));
+      if (parts[3]) embed.setFooter({ text: parts[3].slice(0, 2048), iconURL: client.user.displayAvatarURL() });
+      const attachment = message.attachments.find(a => a.contentType?.startsWith('image/'));
+      const imageUrl = parts[4] || attachment?.url;
+      if (imageUrl && /^https?:\/\/\S+$/i.test(imageUrl)) embed.setImage(imageUrl);
+      await message.channel.send({
+        embeds: [embed],
+        allowedMentions: { parse: ['users', 'roles'] },
+      });
+      return;
+    }
+
+    if (cmd === 'panelbutton') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return sendTemp(message.channel, 'You need Manage Messages to add panel buttons.', 6000);
+      }
+      const raw = body.slice(cmd.length).trim();
+      const parts = raw.split('|').map(part => part.trim());
+      if (parts.length < 3 || !/^\d{15,22}$/.test(parts[0]) || !parts[1] || !parts[2]) {
+        return sendTemp(message.channel, 'Usage: !panelbutton MESSAGE_ID | Button label | #channel or https://link', 9000);
+      }
+      const [messageId, label, destination] = parts;
+      let url = null;
+      const channelMention = destination.match(/^<#(\d{15,22})>$/);
+      const channelId = channelMention?.[1] || (/^\d{15,22}$/.test(destination) ? destination : null);
+      if (channelId) {
+        const channel = await message.guild.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased() || !channel.guild) {
+          return sendTemp(message.channel, 'I could not find that text channel in this server.', 7000);
+        }
+        url = \`https://discord.com/channels/\${message.guild.id}/\${channel.id}\`;
+      } else if (/^https:\/\/\S+$/i.test(destination)) {
+        url = destination;
+      } else {
+        return sendTemp(message.channel, 'Use a channel mention/ID or a full https:// URL.', 7000);
+      }
+
+      const targetMessage = await message.channel.messages.fetch(messageId).catch(() => null);
+      if (!targetMessage || targetMessage.author.id !== client.user.id) {
+        return sendTemp(message.channel, 'I can only add buttons to a message sent by this bot in the same channel.', 8000);
+      }
+      const rows = targetMessage.components.map(row => ActionRowBuilder.from(row));
+      let row = rows[rows.length - 1];
+      if (!row || row.components.length >= 5) {
+        if (rows.length >= 5) return sendTemp(message.channel, 'Discord allows up to 25 buttons per message.', 7000);
+        row = new ActionRowBuilder();
+        rows.push(row);
+      }
+      row.addComponents(new ButtonBuilder()
+        .setLabel(label.slice(0, 80))
+        .setStyle(ButtonStyle.Link)
+        .setURL(url));
+      await targetMessage.edit({ components: rows });
+      return sendTemp(message.channel, \`Added button: \${label.slice(0, 80)}\`, 5000);
+    }
+
     if (cmd === 'help') {
       const wanted = (args[0] || '').toLowerCase().replace(prefix, '');
       const found = commandList(prefix).find(([a]) => a.toLowerCase().replaceAll(prefix, '').split(/[ /]/)[0] === wanted);
