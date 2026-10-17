@@ -1119,7 +1119,7 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'multipleticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const groupId = `multi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'Support 📬', panelDescription: 'To create a ticket use the Create ticket button', footerText: '3C Bot ~ some cool line I want', embedColor: 0x232428 };
+      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'General Support 📬', panelDescription: 'Choose a ticket type below and our team will help you.', footerText: '3C Bot ~ Built for Rivals. United by 3C.', embedColor: 0x232428 };
       const id = `mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null, tagIds: [], tagTypes: [], panelGroupId: groupId };
       data.ticketPanels[groupId].ticketIds.push(id);
@@ -1632,7 +1632,7 @@ client.on('interactionCreate', async (interaction) => {
         const ticketConfig = data.tickets[ticketId];
         const parentGroup = ticketConfig.panelGroupId ? data.ticketPanels[ticketConfig.panelGroupId] : null;
         const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
-        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3C Bot ~ some cool line I want', iconURL: client.user.displayAvatarURL() });
+        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3C Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
         return embed;
       };
       config.panelChannelId=interaction.channel.id;
@@ -1643,9 +1643,9 @@ client.on('interactionCreate', async (interaction) => {
         const configuredIds = group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).slice(0,6);
         const panelEmbed = new EmbedBuilder()
           .setColor(group.embedColor ?? 0x232428)
-          .setTitle(group.panelTitle || 'Support 📬')
-          .setDescription(group.panelDescription || 'To create a ticket use the Create ticket button')
-          .setFooter({ text: group.footerText || '3C Bot ~ some cool line I want', iconURL: client.user.displayAvatarURL() });
+          .setTitle(group.panelTitle || 'General Support 📬')
+          .setDescription(group.panelDescription || 'Choose a ticket type below and our team will help you.')
+          .setFooter({ text: group.footerText || '3C Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
         const panelButtons = configuredIds.map(buildTicketButton);
         const panelRows = [];
         for (let i = 0; i < panelButtons.length; i += 5) panelRows.push(new ActionRowBuilder().addComponents(...panelButtons.slice(i, i + 5)));
@@ -1686,9 +1686,9 @@ client.on('interactionCreate', async (interaction) => {
       const guildId = group?.guildId || config?.guildId;
       if (!ownerId || guildId !== interaction.guildId) return interaction.reply({ content: '❌ This panel setup no longer exists.', ephemeral: true });
       if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
-      const currentTitle = group?.panelTitle || config?.title || 'Support 📬';
-      const currentDescription = group?.panelDescription || config?.description || 'To create a ticket use the Create ticket button';
-      const currentFooter = group?.footerText || config?.footerText || '3C Bot ~ some cool line I want';
+      const currentTitle = group?.panelTitle || config?.title || 'General Support 📬';
+      const currentDescription = group?.panelDescription || config?.description || 'Choose a ticket type below and our team will help you.';
+      const currentFooter = group?.footerText || config?.footerText || '3C Bot ~ Built for Rivals. United by 3C.';
       const modal = new ModalBuilder().setCustomId(`ticket:panelmodal:${panelId}`).setTitle('Edit Ticket Panel Embed');
       const f = (field, label, value, style, max) => new TextInputBuilder().setCustomId(field).setLabel(label).setValue(String(value).slice(0,max)).setStyle(style).setRequired(true).setMaxLength(max);
       modal.addComponents(
@@ -1768,7 +1768,7 @@ client.on('interactionCreate', async (interaction) => {
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3C Bot ~ some cool line I want', iconURL:client.user.displayAvatarURL()});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3C Bot ~ Built for Rivals. United by 3C.', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
       const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
