@@ -1135,9 +1135,15 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'closeticket' || cmd === 'ct') {
       const topic = message.channel.topic || '';
       if (!topic.startsWith('3C-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
-      const ownerId = topic.split(':')[1];
+      const topicParts = topic.split(':');
+      const ownerId = topicParts[1];
+      const ticketConfig = data.tickets[topicParts[2]];
+      const tagIds = ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
+      const tagTypes = ticketConfig?.tagTypes || (ticketConfig?.tagType ? [ticketConfig.tagType] : []);
+      const isSelectedUser = tagIds.some((id, i) => tagTypes[i] === 'user' && id === message.author.id);
+      const isSelectedRole = tagIds.some((id, i) => tagTypes[i] === 'role' && message.member.roles.cache.has(id));
       const isStaff = hasPerm(message.member, PermissionsBitField.Flags.ManageChannels);
-      if (message.author.id !== ownerId && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator or staff with Manage Channels can close this ticket.', 5000);
+      if (message.author.id !== ownerId && !isSelectedUser && !isSelectedRole && !isStaff) return sendTemp(message.channel, '❌ Only the ticket creator, selected ticket staff, or staff with Manage Channels can close this ticket.', 5000);
       const reason = args.join(' ').trim();
       if (!reason) return sendTemp(message.channel, `Usage: ${prefix}closeticket <reason> — or click the **Close Ticket** button to enter a reason in a form.`, 7000);
       const ticket = message.channel, category = ticket.parent;
@@ -1781,8 +1787,14 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isButton() && interaction.customId==='ticket:close') {
       const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
-      const ownerId=topic.split(':')[1], staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
-      if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ Only the ticket creator or Manage Channels staff can close this ticket.',ephemeral:true});
+      const topicParts=topic.split(':');
+      const ownerId=topicParts[1], ticketConfig=data.tickets[topicParts[2]];
+      const tagIds=ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
+      const tagTypes=ticketConfig?.tagTypes || (ticketConfig?.tagType ? [ticketConfig.tagType] : []);
+      const isSelectedUser=tagIds.some((id,i)=>tagTypes[i]==='user'&&id===interaction.user.id);
+      const isSelectedRole=tagIds.some((id,i)=>tagTypes[i]==='role'&&interaction.member?.roles?.cache?.has(id));
+      const staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      if(interaction.user.id!==ownerId&&!isSelectedUser&&!isSelectedRole&&!staff) return interaction.reply({content:'❌ Only the ticket creator, selected ticket staff, or Manage Channels staff can close this ticket.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId('ticket:closemodal').setTitle('Close Ticket');
       modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket:closereason').setLabel('Close reason').setStyle(TextInputStyle.Paragraph).setPlaceholder('Why is this ticket being closed?').setRequired(true).setMaxLength(1000)));
       return interaction.showModal(modal);
@@ -1790,9 +1802,17 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId==='ticket:closemodal') {
       const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
-      const ownerId=topic.split(':')[1], staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
-      if(interaction.user.id!==ownerId&&!staff) return interaction.reply({content:'❌ You cannot close this ticket.',ephemeral:true});
-      const reason=interaction.fields.getTextInputValue('ticket:closereason').trim(), ticket=interaction.channel, category=ticket.parent;
+      const topicParts=topic.split(':');
+      const ownerId=topicParts[1], ticketConfig=data.tickets[topicParts[2]];
+      const tagIds=ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
+      const tagTypes=ticketConfig?.tagTypes || (ticketConfig?.tagType ? [ticketConfig.tagType] : []);
+      const isSelectedUser=tagIds.some((id,i)=>tagTypes[i]==='user'&&id===interaction.user.id);
+      const isSelectedRole=tagIds.some((id,i)=>tagTypes[i]==='role'&&interaction.member?.roles?.cache?.has(id));
+      const staff=interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageChannels);
+      if(interaction.user.id!==ownerId&&!isSelectedUser&&!isSelectedRole&&!staff) return interaction.reply({content:'❌ Only the ticket creator, selected ticket staff, or Manage Channels staff can close this ticket.',ephemeral:true});
+      const reason=interaction.fields.getTextInputValue('ticket:closereason').trim();
+      if(!reason) return interaction.reply({content:'❌ Please enter a close reason.',ephemeral:true});
+      const ticket=interaction.channel, category=ticket.parent;
       if (staff) {
         const closerStats = staffStatsFor(interaction.guild.id, interaction.user.id);
         closerStats.ticketsClosed = (closerStats.ticketsClosed || 0) + 1;
