@@ -77,7 +77,7 @@ function requirePermission(permission) {
   return (req, res, next) => {
     const user = req.session.user;
     if (!user) return res.status(401).json({ error: 'Sign in required.' });
-    if (user.isMainOwner || user.isServerOwner || (Array.isArray(user.permissions) && user.permissions.includes(permission))) return next();
+    if (user.isMainOwner || (Array.isArray(user.permissions) && (user.permissions.includes('*') || user.permissions.includes(permission)))) return next();
     return res.status(403).json({ error: 'You do not have permission to do that.' });
   };
 }
@@ -85,7 +85,7 @@ function csrfGuard(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const expected = req.session.csrfToken;
   const supplied = req.get('x-csrf-token');
-  if (!expected || !supplied || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(supplied)))) {
+  if (!expected || !supplied || Buffer.byteLength(expected) !== Buffer.byteLength(String(supplied)) || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(supplied)))) {
     return res.status(403).json({ error: 'Invalid CSRF token. Refresh the page and try again.' });
   }
   next();
@@ -95,20 +95,11 @@ function makeCsrf(req) {
   return req.session.csrfToken;
 }
 
-app.use(session({
-  name: '3c_dashboard_session',
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  store: () => sessionStore,
-  cookie: {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: 'lax',
-    maxAge: 8 * 60 * 60 * 1000,
-    path: '/'
-  }
-}));
+let sessionMiddleware;
+app.use((req, res, next) => {
+  if (!sessionMiddleware) return res.status(503).send('3C Dashboard is starting. Refresh in a moment.');
+  sessionMiddleware(req, res, next);
+});
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: 'draft-7', legacyHeaders: false });
 app.use('/auth', loginLimiter);
@@ -272,7 +263,7 @@ app.patch('/api/staff/:id/status', requireAuth, csrfGuard, requireOwner, async (
     { $set: { status, updatedAt: new Date(), updatedBy: req.session.user.id } }
   );
   if (!result.matchedCount) return res.status(404).json({ error: 'Account not found.' });
-  await db.collection('dashboardSessions').deleteMany({ 'session.accountId': req.params.id });
+  await db.collection('dashboardSessions').deleteMany({ 'session.user.accountId': req.params.id });
   await audit(req.session.user.id, 'staff.status_changed', { accountId: req.params.id, status, ip: req.ip });
   res.json({ ok: true, status });
 });
@@ -308,6 +299,14 @@ async function start() {
   await db.collection('dashboardUsers').createIndex({ discordId: 1 }, { unique: true });
   await db.collection('dashboardAudit').createIndex({ at: -1 });
   sessionStore = MongoStore.create({ client: mongo, dbName: db.databaseName, collectionName: 'dashboardSessions', ttl: 8 * 60 * 60 });
+  sessionMiddleware = session({
+    name: '3c_dashboard_session',
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    store: sessionStore,
+    cookie: { httpOnly: true, secure: isProduction, sameSite: 'lax', maxAge: 8 * 60 * 60 * 1000, path: '/' }
+  });
   app.listen(port, '0.0.0.0', () => console.log('3C dashboard listening on port ' + port));
 }
 start().catch((error) => {
