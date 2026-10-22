@@ -281,16 +281,24 @@ app.use('/api', (error, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong. Check server logs for details.' });
 });
 
+// Serve the real dashboard only after authentication. Never send the public redirect
+// page here: index.html redirects back to login.html and would create a login loop.
 app.get('/', (req, res) => {
   if (!req.session.user) return res.redirect('/login');
   res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(webRoot, 'index.html'));
+  res.sendFile(path.join(webRoot, 'dashboard.html'));
 });
 app.get('/index.html', (req, res) => {
   if (!req.session.user) return res.redirect('/login');
   res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(webRoot, 'index.html'));
+  res.sendFile(path.join(webRoot, 'dashboard.html'));
 });
+app.get('/dashboard.html', (req, res) => {
+  if (!req.session.user) return res.redirect('/login');
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(webRoot, 'dashboard.html'));
+});
+// Keep private HTML out of express.static; other public assets (CSS/JS/images) are safe.
 app.use(express.static(webRoot, { index: false, maxAge: isProduction ? '1h' : 0 }));
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/auth/')) return res.status(404).json({ error: 'Not found.' });
