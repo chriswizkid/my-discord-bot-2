@@ -304,7 +304,7 @@ async function start() {
   await db.collection('dashboardUsers').createIndex({ username: 1 }, { unique: true });
   await db.collection('dashboardUsers').createIndex({ discordId: 1 }, { unique: true });
   await db.collection('dashboardAudit').createIndex({ at: -1 });
-  sessionStore = MongoStore.create({ client: mongo, dbName: db.databaseName, collectionName: 'dashboardSessions', ttl: 8 * 60 * 60 });
+  sessionStore = MongoStore.create({ client: mongo, dbName: db.databaseName, collectionName: 'dashboardSessions', ttl: 8 * 60 * 60, stringify: false });
   sessionMiddleware = session({
     name: '3c_dashboard_session',
     secret: process.env.SESSION_SECRET,
