@@ -82,6 +82,47 @@
     })
     .catch(() => {});
 
+  // Load the authenticated user's real Discord server list into the sidebar selector.
+  const serverChip = document.querySelector('.server-chip');
+  if (serverChip) {
+    serverChip.setAttribute('role', 'group');
+    serverChip.setAttribute('aria-label', 'Discord server selector');
+    serverChip.innerHTML = '<span class="server-icon">3C</span><span class="server-picker-wrap"><label class="server-picker-label" for="server-picker">SELECT SERVER</label><select id="server-picker" aria-label="Select a Discord server"><option value="">Loading servers…</option></select><small id="server-picker-status">Loading your Discord server list</small></span>';
+    const picker = document.getElementById('server-picker');
+    const status = document.getElementById('server-picker-status');
+    fetch('/api/me', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(response => {
+        if (!response.ok) throw new Error('Could not load your account');
+        return response.json();
+      })
+      .then(data => {
+        const guilds = Array.isArray(data?.user?.ownedGuilds) ? data.user.ownedGuilds : [];
+        picker.replaceChildren();
+        if (!guilds.length) {
+          picker.add(new Option('No owned servers found', ''));
+          status.textContent = 'Discord only returned servers you own. Make sure you authorised the correct account.';
+          return;
+        }
+        picker.add(new Option('Choose a server…', ''));
+        guilds.sort((a, b) => String(a.name).localeCompare(String(b.name))).forEach(guild => {
+          picker.add(new Option(guild.name, guild.id));
+        });
+        status.textContent = guilds.length + ' server' + (guilds.length === 1 ? '' : 's') + ' available to this Discord account';
+        picker.addEventListener('change', () => {
+          const chosen = guilds.find(guild => guild.id === picker.value);
+          if (!chosen) return;
+          serverChip.dataset.selectedGuildId = chosen.id;
+          serverChip.dataset.selectedGuildName = chosen.name;
+          status.textContent = 'Selected: ' + chosen.name + ' · server-specific tools are being connected';
+          document.dispatchEvent(new CustomEvent('3c:server-selected', { detail: { id: chosen.id, name: chosen.name } }));
+        });
+      })
+      .catch(() => {
+        picker.replaceChildren(new Option('Unable to load servers', ''));
+        status.textContent = 'Refresh the page or sign in again.';
+      });
+  }
+
   updateTicket();
   updateEmbed();
 })();
