@@ -6,3 +6,11 @@
 @media(max-width:480px){.hero-orb{display:none}.cards{grid-template-columns:1fr 1fr;gap:8px}.module-card{padding:13px;min-height:170px}.module-card p{font-size:9px}.topbar{align-items:flex-start}.nav-item{font-size:10px;gap:7px}.nav-item span{font-size:14px}.status-list>div{gap:8px}.state{font-size:7px}.table-toolbar{align-items:stretch;flex-direction:column}.demo-label{margin-left:0}}
 
 [hidden]{display:none!important}
+
+/* Authenticated Discord server selector */
+.server-chip{min-width:0}
+.server-picker-wrap{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1}
+.server-picker-label{font:9px 'DM Mono',monospace;letter-spacing:1px;color:#9b91e8}
+#server-picker{width:100%;min-width:0;border:1px solid #343044;border-radius:7px;background:#0c0e15;color:#f4f5fa;padding:7px 8px;font:11px Manrope,system-ui,sans-serif;outline:none}
+#server-picker:focus{border-color:#8d78ff}
+#server-picker-status{font-size:9px;line-height:1.5;color:#9298aa;letter-spacing:0}
