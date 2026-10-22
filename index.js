@@ -731,7 +731,7 @@ client.on('messageCreate', async (message) => {
       }
 
       await safeDelete(message);
-      return message.channel.send('🤫 whisper sent').then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+      return message.channel.send('🤫 whisper sent').catch(() => {});
     }
 
     // BLEHHH
@@ -1399,7 +1399,7 @@ client.on('messageCreate', async (message) => {
       data.reportCooldowns[cooldownKey] = until;
       saveData();
       await safeDelete(message);
-      return message.channel.send('report successfully submitted').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      return message.channel.send('report successfully submitted').catch(() => {});
     }
 
     // REPORT LOG SETUP — connect to an existing channel only; never create a channel.
