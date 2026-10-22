@@ -58,6 +58,30 @@
     const query = logSearch.value.toLowerCase();
     document.querySelectorAll('#log-rows tr').forEach(row => row.hidden = !row.textContent.toLowerCase().includes(query));
   });
+
+  // Account administration is shown only after the secure backend confirms main-owner access.
+  // Hiding a link is only a UI convenience; API routes must enforce authorization too.
+  const accountNav = document.querySelector('[data-page="accounts"]');
+  const accountPage = document.getElementById('page-accounts');
+  const accountShortcuts = document.querySelectorAll('[data-go="accounts"]');
+  const hideAccountTools = () => {
+    if (accountNav) accountNav.hidden = true;
+    if (accountPage) accountPage.hidden = true;
+    accountShortcuts.forEach(el => { el.hidden = true; });
+    if (accountPage?.classList.contains('active')) showPage('overview');
+  };
+  hideAccountTools();
+  fetch('/api/me', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+    .then(response => response.ok ? response.json() : null)
+    .then(data => {
+      if (data?.user?.isMainOwner === true) {
+        if (accountNav) accountNav.hidden = false;
+        if (accountPage) accountPage.hidden = false;
+        accountShortcuts.forEach(el => { el.hidden = false; });
+      }
+    })
+    .catch(() => {});
+
   updateTicket();
   updateEmbed();
 })();
