@@ -1317,7 +1317,13 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '🔨 Member Banned', `${target.user} was banned by ${message.author}.`, 0xE74C3C, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`🔨 **${target.user.tag}** was banned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      const executeEmbed = new EmbedBuilder()
+        .setColor(0xE74C3C)
+        .setDescription(`🔨 **${target.user.tag}** has been executed. ${reason ? `Reason: ${reason}` : 'No reason provided.'}`)
+        .setImage('https://i.postimg.cc/qR6n7Wrj/IMG-20261022-180501.jpg')
+        .setFooter({ text: `3C Bot • Executed by ${message.author.tag}` })
+        .setTimestamp();
+      return message.channel.send({ embeds: [executeEmbed] }).catch(() => {});
     }
 
     // UNBAN
