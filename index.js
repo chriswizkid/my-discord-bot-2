@@ -900,7 +900,14 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '⚠️ Member Warned', `${target.user} was warned by ${message.author}.`, 0xF39C12, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`⚠️ **${target.user.tag}** was warned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      const warnEmbed = new EmbedBuilder()
+        .setColor(0xF1C40F)
+        .setTitle('⚠️ WARNING ISSUED')
+        .setDescription(`**${target.user.tag}** has received a warning. Play nice!`)
+        .addFields({ name: 'Reason', value: reason || 'No reason provided.' }, { name: 'Moderator', value: `${message.author}`, inline: true }, { name: 'Total warnings', value: String(list.length), inline: true })
+        .setFooter({ text: '3C Bot • Keep it respectful' })
+        .setTimestamp();
+      return message.channel.send({ embeds: [warnEmbed] }).catch(() => {});
     }
 
     // UNWARN
@@ -948,7 +955,14 @@ client.on('messageCreate', async (message) => {
         { name: 'Duration', value: prettyDuration(ms) },
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`🔇 **${target.user.tag}** was muted for **${prettyDuration(ms)}**${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      const muteEmbed = new EmbedBuilder()
+        .setColor(0x7F8C8D)
+        .setTitle('🔇 TIMEOUT ACTIVATED')
+        .setDescription(`**${target.user.tag}** has been put in timeout. Time to cool off.`)
+        .addFields({ name: 'Duration', value: prettyDuration(ms), inline: true }, { name: 'Reason', value: reason || 'No reason provided.' }, { name: 'Moderator', value: `${message.author}`, inline: true })
+        .setFooter({ text: '3C Bot • Moderation action' })
+        .setTimestamp();
+      return message.channel.send({ embeds: [muteEmbed] }).catch(() => {});
     }
     if (cmd === 'unmute' || cmd === 'untimeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
@@ -1302,7 +1316,14 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '👢 Member Kicked', `${target.user} was kicked by ${message.author}.`, 0xE67E22, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`👢 **${target.user.tag}** was kicked${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      const kickEmbed = new EmbedBuilder()
+        .setColor(0xE67E22)
+        .setTitle('👢 OUT YOU GO!')
+        .setDescription(`**${target.user.tag}** has been kicked from the server.`)
+        .addFields({ name: 'Reason', value: reason || 'No reason provided.' }, { name: 'Moderator', value: `${message.author}`, inline: true })
+        .setFooter({ text: '3C Bot • Moderation action' })
+        .setTimestamp();
+      return message.channel.send({ embeds: [kickEmbed] }).catch(() => {});
     }
 
     // BAN
