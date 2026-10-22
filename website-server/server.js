@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('express-async-errors');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const express = require('express');
@@ -281,6 +282,11 @@ app.use('/api', (error, req, res, next) => {
 });
 
 app.get('/', (req, res) => {
+  if (!req.session.user) return res.redirect('/login');
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(webRoot, 'index.html'));
+});
+app.get('/index.html', (req, res) => {
   if (!req.session.user) return res.redirect('/login');
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(webRoot, 'index.html'));
