@@ -169,8 +169,13 @@ app.get('/auth/discord/callback', async (req, res) => {
         return res.redirect('/login?error=not_authorized');
       }
     }
+    // Show servers the user owns OR can administer, not only servers they personally own.
+    // Discord guild permissions: ADMINISTRATOR = 8, MANAGE_GUILD = 32.
     const ownedGuilds = Array.isArray(guilds)
-      ? guilds.filter((guild) => guild.owner).map((guild) => ({ id: String(guild.id), name: String(guild.name) }))
+      ? guilds.filter((guild) => {
+          const permissions = BigInt(String(guild.permissions || '0'));
+          return guild.owner === true || (permissions & 8n) === 8n || (permissions & 32n) === 32n;
+        }).map((guild) => ({ id: String(guild.id), name: String(guild.name) }))
       : [];
     await new Promise((resolve, reject) => req.session.regenerate((err) => err ? reject(err) : resolve()));
     req.session.user = {
