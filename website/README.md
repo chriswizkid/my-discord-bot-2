@@ -1,19 +1,5 @@
-# 3C Control Center — UI Preview
+# 3C Control Center preview
 
-This folder contains the first static UI draft for the 3C Bot dashboard.
+This is a static UI preview only. It contains no live Discord data and does not enforce sign-in or permissions when hosted as a static GitHub Pages site. Do not use the static preview for private server data. The production dashboard must be served by the separate website-server backend, which gates the dashboard behind Discord OAuth and approved staff identity.
 
-## Preview locally
-Open `index.html` in a browser, or serve this folder with any simple static file server. No build step is required.
-
-## What's interactive in this draft
-- Sidebar navigation between the planned dashboard sections.
-- Ticket panel preview with Discord's four supported button styles: blue, grey, green, red.
-- Embed preview with a custom hex accent colour.
-- Search filtering for the sample moderation-log rows.
-
-## Important status
-This is a **front-end preview only**, not a live dashboard. The example log rows are fake. It does not sign users in, contact Discord, send messages, save configuration, or enforce permissions.
-
-Before real use, add a backend with Discord OAuth verification, server-side owner/staff permission checks, secure sessions, password hashing for invited accounts, CSRF protection, audit logging, persistent storage, and environment-based secrets. Do not put bot tokens, MongoDB credentials, or session secrets in browser code.
-
-The website is intentionally being developed on the `feature/3c-command-updates` branch and is not deployed by this commit.
+The preview's ticket builder and embed designer are interactive locally; saving, sending, OAuth login, staff management, ticket management, and live bot integrations are not active on GitHub Pages.
