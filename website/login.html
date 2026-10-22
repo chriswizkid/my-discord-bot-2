@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0c12">
+  <title>Sign in · 3C Control Center</title>
+  <link rel="stylesheet" href="./login.css">
+  <script defer src="./login.js"></script>
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-art">
+      <a class="brand" href="/login"><span class="brand-mark">3C</span><span><b>3C CONTROL</b><small>BOT DASHBOARD</small></span></a>
+      <div class="art-copy"><div class="eyebrow">YOUR SERVER. YOUR RULES.</div><h1>Control the chaos.<br><span>Keep it 3C.</span></h1><p>A single control center for tickets, staff applications, announcements, and moderation tools.</p><div class="feature-chips"><span>✦ Ticket tools</span><span>⚑ Mod logs</span><span>▣ Embed studio</span></div></div>
+      <div class="art-mark">3C<span>CONTROL CENTER</span></div>
+    </section>
+    <section class="login-panel">
+      <div class="mobile-brand"><span class="brand-mark">3C</span><b>3C CONTROL</b></div>
+      <div class="login-card">
+        <div class="eyebrow">SECURE ACCESS</div>
+        <h2>Welcome back.</h2>
+        <p class="intro">Sign in with your authorised dashboard account.</p>
+        <div id="error" class="error" role="alert" hidden></div>
+        <form id="login-form">
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" placeholder="Your staff username" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" maxlength="200" placeholder="Your password" required>
+          <button class="primary" type="submit">Continue with Discord <span>↗</span></button>
+        </form>
+        <div class="separator"><span>OR</span></div>
+        <a class="discord-button" href="/auth/discord"><span class="discord-logo">◉</span> Sign in as main owner</a>
+        <p class="security-note"><span>🔒</span> Access is limited to authorised Discord identities. Your account must be approved by the dashboard owner.</p>
+      </div>
+      <footer>3C CONTROL CENTER <span>SECURE DASHBOARD</span></footer>
+    </section>
+  </main>
+</body>
+</html>
