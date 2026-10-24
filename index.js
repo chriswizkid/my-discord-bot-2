@@ -1756,7 +1756,7 @@ client.on('interactionCreate', async (interaction) => {
       const [, action, currentRaw] = interaction.customId.split(':');
       const current = Number(currentRaw) || 0;
       const pages = [
-        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/shut','unmute/untimeout','kick','ban/execute','unban']],
+        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/jail','unmute/untimeout','kick','ban/execute','unban']],
         ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','roleinfo','staff','slowmode','lock','unlock']],
         ['🎟️ 3C Tickets & Server', ['ticket','multipleticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
         ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','poop','afk','help']]
