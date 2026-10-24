@@ -570,6 +570,11 @@ client.on('messageCreate', async (message) => {
     const cake = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'birthday_cake');
     if (cake) await message.react(cake).catch(() => {});
   }
+  // While the temporary Poop role is active, react to every message this member sends.
+  if (message.member?.roles.cache.has(POOP_ROLE_ID)) {
+    const poopEmoji = message.guild.emojis.cache.find(e => /poop|poo/i.test(e.name));
+    await message.react(poopEmoji || '💩').catch(() => {});
+  }
 });
 
 client.on('messageDelete', async (message) => {
