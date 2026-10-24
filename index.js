@@ -1347,16 +1347,61 @@ client.on('messageCreate', async (message) => {
       return message.channel.send({ embeds: [executeEmbed] }).catch(() => {});
     }
 
-    // UNBAN
+    // UNBAN — accepts resolved mentions, raw mention syntax, and plain user IDs.
     if (cmd === 'unban') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
-      const id = message.mentions.users.first()?.id || args.find(x => /^\d{15,25}$/.test(x));
-      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban @user (or user ID)`, 5000);
-      const ban = await message.guild.bans.fetch(id).catch(() => null);
-      if (!ban) return sendTemp(message.channel, '❌ That member is not banned.', 5000);
-      await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
+      const rawId = args.map(x => {
+        const mention = x.match(/^<@!?(\d{15,25})>$/);
+        return mention ? mention[1] : x;
+      }).find(x => /^\d{15,25}$/.test(x));
+      const id = message.mentions.users.first()?.id || rawId;
+      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban @user or ${prefix}unban USER_ID`, 6000);
+      let ban;
+      try {
+        ban = await message.guild.bans.fetch(id);
+      } catch (error) {
+        console.error('Unban lookup failed:', error);
+        return sendTemp(message.channel, '❌ I could not check that ban. Check my **Ban Members** permission and try again.', 6000);
+      }
+      if (!ban) return sendTemp(message.channel, '❌ That user is not currently banned from this server.', 6000);
+      try {
+        await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
+      } catch (error) {
+        console.error('Unban action failed:', error);
+        return sendTemp(message.channel, '❌ I found the ban but could not remove it. Check my **Ban Members** permission.', 6000);
+      }
       recordStaffAction(message.guild.id, message.author.id, 'unban', id, `Unbanned by ${message.author.tag}`, '3c');
-      return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}**.`, 6000);
+      return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}** (${id}).`, 6000);
+    }
+
+    // CREATE SERVER INVITE — usage: !invite <10m|1h|1d|7d|never> [max uses]
+    if (cmd === 'invite' || cmd === 'createinvite') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.CreateInstantInvite)) return sendTemp(message.channel, '❌ You need **Create Invite** permission.', 5000);
+      if (!message.channel || !message.channel.isTextBased() || !message.channel.createInvite) return sendTemp(message.channel, '❌ I cannot create an invite from this channel.', 5000);
+      const durationText = (args[0] || '1h').toLowerCase();
+      const durationMap = { '10m': 600, '1h': 3600, '1d': 86400, '7d': 604800, 'never': 0 };
+      if (!Object.prototype.hasOwnProperty.call(durationMap, durationText)) {
+        return sendTemp(message.channel, `Usage: ${prefix}invite <10m|1h|1d|7d|never> [max uses]`, 7000);
+      }
+      const maxUses = args[1] === undefined ? 0 : Number(args[1]);
+      if (!Number.isInteger(maxUses) || maxUses < 0 || maxUses > 100) return sendTemp(message.channel, `❌ Max uses must be 0 (unlimited) or a number from 1 to 100. Example: ${prefix}invite 1d 10`, 7000);
+      try {
+        const invite = await message.channel.createInvite({
+          maxAge: durationMap[durationText],
+          maxUses,
+          unique: true,
+          reason: `Invite created by ${message.author.tag} using 3C Bot`
+        });
+        const expiryLabel = durationText === 'never' ? 'Never (no expiry)' : durationText;
+        const usesLabel = maxUses === 0 ? 'Unlimited' : String(maxUses);
+        return message.channel.send({
+          content: `🔗 **Server invite created!**\n${invite.url}\n**Expires:** ${expiryLabel}\n**Max uses:** ${usesLabel}\n**Created by:** ${message.author}`,
+          allowedMentions: { users: [message.author.id] }
+        });
+      } catch (error) {
+        console.error('Invite creation failed:', error);
+        return sendTemp(message.channel, '❌ I could not create the invite. Check my **Create Invite** permission in this channel.', 6000);
+      }
     }
 
     // PURGE USER
