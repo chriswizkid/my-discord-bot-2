@@ -348,7 +348,7 @@ function commandList(prefix) {
     [`${prefix}warn/shout @user [reason]`, 'Warn a member and DM them the warning card.'],
     [`${prefix}unwarn @user <number>`, 'Remove one or more warning numbers.'],
     [`${prefix}warnings @user`, 'Show how many warnings a member has and list their warnings.'],
-    [`${prefix}mute/timeout/shut @user <time> [reason]`, 'Timeout a member for a duration.'],
+    [`${prefix}mute/timeout/jail @user <time> [reason]`, 'Timeout a member for a duration.'],
     [`${prefix}unmute/untimeout @user`, 'Remove a member timeout.'],
     [`${prefix}afk [reason]`, 'Set yourself AFK; it is removed when you return.'],
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
@@ -901,14 +901,9 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '⚠️ Member Warned', `${target.user} was warned by ${message.author}.`, 0xF39C12, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      const warnEmbed = new EmbedBuilder()
-        .setColor(0xF1C40F)
-        .setTitle('⚠️ WARNING ISSUED')
-        .setDescription(`**${target.user.tag}** has received a warning. Play nice!`)
-        .addFields({ name: 'Reason', value: reason || 'No reason provided.' }, { name: 'Moderator', value: `${message.author}`, inline: true }, { name: 'Total warnings', value: String(list.length), inline: true })
-        .setFooter({ text: '3C Bot • Keep it respectful' })
-        .setTimestamp();
-      return message.channel.send({ embeds: [warnEmbed] }).catch(() => {});
+      return message.channel.send(
+        `## ⚠️ **WARNED!**\n${target.user} has been warned for **${reason || 'No reason provided'}**. You better not do it again!`
+      ).catch(() => {});
     }
 
     // UNWARN
@@ -940,30 +935,28 @@ client.on('messageCreate', async (message) => {
       return message.channel.send({ embeds: [e] });
     }
 
-    // MUTE / UNMUTE
-    if (cmd === 'mute' || cmd === 'timeout' || cmd === 'shut') {
+    // MUTE / TIMEOUT / JAIL
+    if (cmd === 'mute' || cmd === 'timeout' || cmd === 'jail') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
-      if (!target) return sendTemp(message.channel, `Usage: ${prefix}mute/timeout/shut @user <time> [reason]`, 5000);
-      if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot mute that member because their highest role is equal to or higher than my bot role.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}${cmd} @user <time> [reason]`, 5000);
+      if (!canAct(message.member, target) || !canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot moderate that member because of role hierarchy.', 5000);
       const durationArg = args.find(x => /^\d+(?:\.\d+)?(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/i.test(x));
       const ms = parseTime(durationArg);
-      if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Mute time must be between 1s and 28d, e.g. `10m`.', 5000);
-      const reason = cleanReason(args.slice(1));
+      if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, `❌ ${cmd === 'jail' ? 'Jail' : 'Timeout'} duration must be between 1 second and 28 days, e.g. \`10m\` or \`7d\`. Discord's timeout limit is 28 days.`, 7000);
+      const reason = cleanReason(args.filter(x => x !== durationArg && !/^<@!?\d+>$/.test(x)));
+      const endsAt = Date.now() + ms;
       await target.timeout(ms, reason || undefined);
       recordStaffAction(message.guild.id, message.author.id, 'timeout', target.id, reason, '3c');
       await dmModeration(target.user, message.guild, 'mute', message.author, reason);
-      await auditLog(message.guild, '🔇 Member Muted', `${target.user} was muted by ${message.author}.`, 0x95A5A6, [
+      await auditLog(message.guild, cmd === 'jail' ? '🔒 Member Jailed' : '🔇 Member Timed Out', `${target.user} was ${cmd === 'jail' ? 'jailed' : 'timed out'} by ${message.author}.`, 0x95A5A6, [
         { name: 'Duration', value: prettyDuration(ms) },
+        { name: 'Return time', value: new Date(endsAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) },
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      const muteEmbed = new EmbedBuilder()
-        .setColor(0x7F8C8D)
-        .setTitle('🔇 TIMEOUT ACTIVATED')
-        .setDescription(`**${target.user.tag}** has been put in timeout. Time to cool off.`)
-        .addFields({ name: 'Duration', value: prettyDuration(ms), inline: true }, { name: 'Reason', value: reason || 'No reason provided.' }, { name: 'Moderator', value: `${message.author}`, inline: true })
-        .setFooter({ text: '3C Bot • Moderation action' })
-        .setTimestamp();
-      return message.channel.send({ embeds: [muteEmbed] }).catch(() => {});
+      const actionLabel = cmd === 'jail' ? 'JAILED' : 'TIMEOUT ACTIVATED';
+      return message.channel.send(
+        `## 🔒 **${actionLabel}!**\n${target.user} has been ${cmd === 'jail' ? 'jailed' : 'put in timeout'} for **${prettyDuration(ms)}**.\n**Reason:** ${reason || 'No reason provided.'}\n**Returns:** <t:${Math.floor(endsAt / 1000)}:F> (<t:${Math.floor(endsAt / 1000)}:R>)`
+      ).catch(() => {});
     }
     if (cmd === 'unmute' || cmd === 'untimeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
