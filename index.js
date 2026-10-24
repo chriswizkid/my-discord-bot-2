@@ -26,6 +26,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
+const { handleWebhookCommand, recoverSchedules } = require('./webhook-manager');
 
 const MONGODB_URI = process.env.MONGODB_URI;
 let mongoClient = null;
@@ -61,6 +62,8 @@ const defaultData = {
   staffStats: {},
   staffCases: {},
   temporaryRoles: {},
+  webhooks: {},
+  scheduledWebhookMessages: {},
 };
 let data = loadData();
 function loadData() {
@@ -543,6 +546,7 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initializeMongoDB();
   recoverTemporaryRoles();
+  recoverSchedules(client, data, saveData);
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   // Register /commands per guild without deleting the server's other application commands.
   if (TOKEN && BOT_APPLICATION_ID) {
@@ -579,6 +583,8 @@ client.on('messageCreate', async (message) => {
 
 client.on('messageDelete', async (message) => {
   if (!message.guild || !message.author || message.author.bot) return;
+  // Webhook URLs are credentials: never copy webhook setup commands into snipe history.
+  if (/^\s*[!?]webhook\s+add\b/i.test(message.content || '')) return;
   const history = deletedSnipes.get(message.channel.id) || [];
   history.unshift({ authorId: message.author.id, authorTag: message.author.tag, content: message.content || '[no text]', attachments: [...message.attachments.values()].map(a => a.url), time: Date.now() });
   deletedSnipes.set(message.channel.id, history.slice(0, 50));
@@ -642,6 +648,10 @@ client.on('messageCreate', async (message) => {
   if (!body) return;
   const args = tokenize(body);
   const cmd = args.shift().toLowerCase();
+
+  if (cmd === 'webhook') {
+    return handleWebhookCommand({ message, args, data, saveData, client });
+  }
 
   // Delete the invoking user's command message after a short delay; bot responses remain visible.
   setTimeout(() => safeDelete(message), 5000);
