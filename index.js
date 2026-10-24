@@ -404,6 +404,7 @@ function commandList(prefix) {
     [`${prefix}unblehhh @user`, 'Remove the Blehhh role immediately (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
     [`${prefix}setupaudit #channel`, 'Connect 3C audit logs to an existing channel; never creates a new channel.'],
+    [`${prefix}webhook help`, 'Manage saved webhooks, custom embeds, link buttons, and scheduled announcements (Manage Webhooks required).'],
     [`${prefix}commands`, 'Show the full command list.'],
   ];
 }
