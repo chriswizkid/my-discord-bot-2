@@ -18,6 +18,9 @@ const {
   ChannelType,
   OverwriteType,
   AuditLogEvent,
+  REST,
+  Routes,
+  SlashCommandBuilder,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -541,16 +544,29 @@ client.once('ready', async () => {
   await initializeMongoDB();
   recoverTemporaryRoles();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
+  // Register /commands per guild without deleting the server's other application commands.
+  if (TOKEN && BOT_APPLICATION_ID) {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    const command = new SlashCommandBuilder().setName('commands').setDescription('Show the 3C Bot command list.');
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        await rest.post(Routes.applicationGuildCommands(BOT_APPLICATION_ID, guild.id), { body: command.toJSON() });
+      } catch (error) {
+        console.error(`Could not register /commands in guild ${guild.id}:`, error.message);
+      }
+    }
+  }
   client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
 });
 
 // React to every message from a member currently holding the Blehhh role.
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.author.bot) return;
-  if (!message.member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
-  const emoji = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'blehhh');
-  if (emoji) await message.react(emoji).catch(() => {});
-  if (message.member.roles.cache.has(BIRTHDAY_ROLE_ID)) {
+  if (message.member?.roles.cache.has(BLEHHH_ROLE_ID)) {
+    const emoji = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'blehhh');
+    if (emoji) await message.react(emoji).catch(() => {});
+  }
+  if (message.member?.roles.cache.has(BIRTHDAY_ROLE_ID)) {
     const cake = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'birthday_cake');
     if (cake) await message.react(cake).catch(() => {});
   }
@@ -1386,7 +1402,7 @@ client.on('messageCreate', async (message) => {
     // BAN
     if (cmd === 'ban' || cmd === 'execute') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
-      if (!target) return sendTemp(message.channel, `Usage: ${prefix}ban/execute @user [reason]`, 5000);
+      if (!target) return sendTemp(message.channel, '❌ Mention a current server member to ban.', 5000);
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot ban that member because of role hierarchy.', 5000);
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'ban', message.author, reason);
@@ -1715,6 +1731,9 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'commands') {
+      return interaction.reply({ content: '**3C Bot Commands**\n`!warn` `!unwarn` `!warnings` `!jail` `!mute` `!unmute` `!kick` `!execute` `!unban` `!invite` `!Birthday` `!endbirthday` `!poop` `!ticket` `!multipleticket` `!closeticket` `!serverinfo` `!prefix` `!help`', ephemeral: true });
+    }
     if (interaction.isStringSelectMenu() && interaction.customId === 'roleinfo:select') {
       const role = interaction.guild?.roles.cache.get(interaction.values[0]);
       if (!role) return interaction.reply({ content: '❌ That role could not be found.', ephemeral: true });
