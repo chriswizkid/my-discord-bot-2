@@ -26,7 +26,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
-const { handleWebhookCommand, recoverSchedules } = require('./webhook-manager');
+const { handleWebhookCommand, handleWebhookInteraction, recoverSchedules } = require('./webhook-manager');
 
 const MONGODB_URI = process.env.MONGODB_URI;
 let mongoClient = null;
@@ -1747,6 +1747,7 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.customId?.startsWith('whpanel:')) { const handled = await handleWebhookInteraction(interaction, { data, saveData, client }); if (handled) return; }
     if (interaction.isChatInputCommand() && interaction.commandName === 'commands') {
       return interaction.reply({ content: '**3C Bot Commands**\n`!warn` `!unwarn` `!warnings` `!jail` `!mute` `!unmute` `!kick` `!execute` `!unban` `!invite` `!Birthday` `!endbirthday` `!poop` `!ticket` `!multipleticket` `!closeticket` `!serverinfo` `!prefix` `!help`', ephemeral: true });
     }
