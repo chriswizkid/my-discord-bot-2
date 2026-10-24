@@ -933,7 +933,7 @@ client.on('messageCreate', async (message) => {
         { name: 'Reason', value: reason || 'No reason' },
       ]);
       return message.channel.send(
-        `## ⚠️ **WARNED!**\n${target.user} has been warned for **${reason || 'No reason provided'}**. You better not do it again!`
+        `## ⚠️ **WARNED!**\n${target.user} has been warned for **${reason || 'No reason provided'}**. You Better Not Do It Again!`
       ).catch(() => {});
     }
 
@@ -986,7 +986,7 @@ client.on('messageCreate', async (message) => {
       ]);
       const actionLabel = cmd === 'jail' ? 'JAILED' : 'TIMEOUT ACTIVATED';
       return message.channel.send(
-        `## 🔒 **${actionLabel}!**\n${target.user} has been ${cmd === 'jail' ? 'jailed' : 'put in timeout'} for **${prettyDuration(ms)}**.\n**Reason:** ${reason || 'No reason provided.'}\n**Returns:** <t:${Math.floor(endsAt / 1000)}:F> (<t:${Math.floor(endsAt / 1000)}:R>)`
+        `## **${cmd === 'jail' ? '🔫 OFF TO JAIL THEM' : '🔇 TIMEOUT ACTIVATED'}**\n${target.user} has been ${cmd === 'jail' ? 'jailed' : 'put in timeout'} for **${prettyDuration(ms)}**. They will be back on <t:${Math.floor(endsAt / 1000)}:F> at <t:${Math.floor(endsAt / 1000)}:t>. ${cmd === 'jail' ? 'CRIMINAL!' : ''}${reason ? `\n**Reason:** ${reason}` : ''}`
       ).catch(() => {});
     }
     if (cmd === 'unmute' || cmd === 'untimeout') {
@@ -1619,7 +1619,7 @@ client.on('messageCreate', async (message) => {
     // HELP / COMMANDS
     if (cmd === 'commands') {
       const pages = [
-        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/shut','unmute/untimeout','kick','ban/execute','unban']],
+        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/jail','unmute/untimeout','kick','ban/execute','unban']],
         ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','roleinfo','staff','slowmode','lock','unlock']],
         ['🎟️ 3C Tickets & Server', ['ticket','multipleticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
         ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','poop','afk','help']]
