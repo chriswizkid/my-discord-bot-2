@@ -379,6 +379,7 @@ function commandList(prefix) {
     [`${prefix}staff @user`, 'Give the Staff role to a member (Manage Roles required).'],
     [`${prefix}poop @user`, 'Give the Poop role for five minutes (boosters or staff only).'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
+    [`${prefix}invite <10m|1h|1d|7d|never> [max uses]`, 'Create a server invite with a chosen expiry and optional use limit.'],
     [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
     [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
     [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3C User Report log to an existing channel.'],
