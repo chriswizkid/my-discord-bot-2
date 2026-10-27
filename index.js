@@ -654,6 +654,24 @@ client.on('messageCreate', async (message) => {
     return handleWebhookCommand({ message, args, data, saveData, client });
   }
 
+  // ROBLOX RIVALS PRIVATE SERVER — picks one of the owner-provided links.
+  if (cmd === 'priv') {
+    const serverLinks = [
+      'https://www.roblox.com/share?code=8a1bc8d96cd92a40904d142b6ef12975&type=Server',
+      'https://www.roblox.com/share?code=4d349ea237c83a4ba4752394e347908e&type=Server',
+      'https://www.roblox.com/share?code=0cf4491fa4a34f4b8bba6f7120ebb5df&type=Server',
+      'https://www.roblox.com/share?code=f0d9e29386e81648b88399bfa7c89bef&type=Server'
+    ];
+    const randomLink = serverLinks[Math.floor(Math.random() * serverLinks.length)];
+    try {
+      await message.author.send(`### **🍀 Here Is A Private Server Link You Can Use🔥**\n${randomLink}`);
+      return message.reply('📬 I sent a random Roblox Rivals private server link to your DMs!');
+    } catch (error) {
+      console.error('Could not DM private server link:', error);
+      return message.reply('❌ I couldn’t DM you! Please enable Direct Messages from this server and try again.');
+    }
+  }
+
   // Delete the invoking user's command message after a short delay; bot responses remain visible.
   setTimeout(() => safeDelete(message), 5000);
 
