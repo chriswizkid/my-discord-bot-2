@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0c12">
+  <meta name="description" content="Secure sign-in for the 3C BOT dashboard.">
+  <title>Sign in · 3C BOT</title>
+  <link rel="stylesheet" href="./login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-art" aria-label="3C BOT dashboard introduction">
+      <a class="brand" href="./login.html" aria-label="3C BOT home">
+        <span class="brand-mark">3C</span>
+        <span><b>3C BOT</b><small>CONTROL DASHBOARD</small></span>
+      </a>
+      <div class="art-copy">
+        <div class="eyebrow">ONE DASHBOARD. FULL CONTROL.</div>
+        <h1>Run your server.<br><span>Your way.</span></h1>
+        <p>Tickets, embeds, announcements, applications, moderation and commands — together in one organised workspace.</p>
+        <div class="feature-chips"><span>✦ Ticket tools</span><span>⚑ Mod logs</span><span>▣ Embed studio</span></div>
+      </div>
+      <div class="art-mark">3C<span>BOT CONTROL</span></div>
+    </section>
+    <section class="login-panel">
+      <div class="mobile-brand"><span class="brand-mark">3C</span><b>3C BOT</b></div>
+      <div class="login-card">
+        <div class="eyebrow">SECURE DASHBOARD ACCESS</div>
+        <h2>Welcome back.</h2>
+        <p class="intro">Sign in with the dashboard account created for you. Staff accounts must also be linked to an authorised Discord account.</p>
+        <div id="login-error" class="error" role="alert" hidden></div>
+        <form id="login-form" autocomplete="on">
+          <label for="username">Username</label>
+          <input id="username" name="username" type="text" autocomplete="username" minlength="3" maxlength="32" placeholder="Enter your username" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" maxlength="200" placeholder="Enter your password" required>
+          <button class="primary" id="login-submit" type="submit">Continue securely <span>↗</span></button>
+        </form>
+        <p class="security-note"><span>🔒</span> Passwords are verified by the dashboard backend. Never share your password or Discord token. If the backend is not connected yet, sign-in will show an error rather than opening a fake session.</p>
+      </div>
+      <footer>3C BOT <span>SECURE ACCESS</span></footer>
+    </section>
+  </main>
+  <script src="./login.js" defer></script>
+</body>
+</html>

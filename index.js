@@ -18,11 +18,15 @@ const {
   ChannelType,
   OverwriteType,
   AuditLogEvent,
+  REST,
+  Routes,
+  SlashCommandBuilder,
 } = require('discord.js');
 
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
+const { handleWebhookCommand, handleWebhookInteraction, recoverSchedules } = require('./webhook-manager');
 
 const MONGODB_URI = process.env.MONGODB_URI;
 let mongoClient = null;
@@ -57,6 +61,9 @@ const defaultData = {
   reportsReceived: {},
   staffStats: {},
   staffCases: {},
+  temporaryRoles: {},
+  webhooks: {},
+  scheduledWebhookMessages: {},
 };
 let data = loadData();
 function loadData() {
@@ -170,13 +177,17 @@ const editedSnipes = new Map(); // channelId -> message data
 const tempMuteTimers = new Map();
 const blehhhCooldowns = new Map();
 const blehhhTimers = new Map();
+const temporaryRoleTimers = new Map();
 const reportCooldowns = new Map();
 const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
 const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
 const BLEHHH_ROLE_ID = '1555571971801088031';
+const POOP_ROLE_ID = '1562791606581469314';
+const BIRTHDAY_ROLE_ID = '1563579108779098244';
+const BIRTHDAY_DURATION_MS = 24 * 60 * 60 * 1000;
+const BOT_APPLICATION_ID = '1562157711867781230';
+const TEMP_ROLE_DURATION_MS = 5 * 60 * 1000;
 const BLEHHH_COOLDOWN_MS = 10 * 1000;
-const BLEHHH_MIN_MS = 10 * 1000;
-const BLEHHH_MAX_MS = 30 * 60 * 1000;
 
 function getPrefix(guildId) { return data.prefixes[guildId] || '!'; }
 function key(guildId, userId) { return `${guildId}:${userId}`; }
@@ -231,9 +242,39 @@ function canBotModerate(target) {
 }
 async function safeDelete(msg) { try { await msg.delete(); } catch {} }
 async function sendTemp(channel, content, ms = 7000) {
-  const m = await channel.send(content).catch(() => null);
-  if (m) setTimeout(() => m.delete().catch(() => {}), ms);
-  return m;
+  // Keep bot responses visible; invoking command messages are cleaned up separately.
+  return channel.send(content).catch(() => null);
+}
+
+function scheduleTemporaryRoleExpiry(guildId, userId, roleId, expiresAt, reason = 'Temporary role expired') {
+  const expiryKey = `${guildId}:${userId}:${roleId}`;
+  const oldTimer = temporaryRoleTimers.get(expiryKey);
+  if (oldTimer) clearTimeout(oldTimer);
+  const expire = async () => {
+    temporaryRoleTimers.delete(expiryKey);
+    const entry = data.temporaryRoles?.[expiryKey];
+    if (!entry) return;
+    const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
+    const member = guild ? await guild.members.fetch(userId).catch(() => null) : null;
+    const role = guild?.roles.cache.get(roleId);
+    if (member && role && member.roles.cache.has(roleId)) {
+      await member.roles.remove(role, reason).catch(error => console.error('Temporary role removal failed:', error.message));
+    }
+    delete data.temporaryRoles[expiryKey];
+    saveData();
+  };
+  const delay = Number(expiresAt) - Date.now();
+  if (delay <= 0) { void expire(); return; }
+  temporaryRoleTimers.set(expiryKey, setTimeout(expire, delay));
+}
+
+function recoverTemporaryRoles() {
+  if (!data.temporaryRoles || typeof data.temporaryRoles !== 'object') data.temporaryRoles = {};
+  for (const entry of Object.values(data.temporaryRoles)) {
+    if (entry?.guildId && entry?.userId && entry?.roleId && Number.isFinite(Number(entry.expiresAt))) {
+      scheduleTemporaryRoleExpiry(entry.guildId, entry.userId, entry.roleId, Number(entry.expiresAt), entry.reason || 'Temporary role expired');
+    }
+  }
 }
 
 async function auditLog(guild, title, description, color = 0x5865F2, fields = []) {
@@ -313,16 +354,16 @@ function findRole(guild, text) {
 
 function commandList(prefix) {
   return [
-    [`${prefix}warn @user [reason]`, 'Warn a member and DM them the warning card.'],
+    [`${prefix}warn/shout @user [reason]`, 'Warn a member and DM them the warning card.'],
     [`${prefix}unwarn @user <number>`, 'Remove one or more warning numbers.'],
     [`${prefix}warnings @user`, 'Show how many warnings a member has and list their warnings.'],
-    [`${prefix}mute/timeout @user <time> [reason]`, 'Timeout a member for a duration.'],
+    [`${prefix}mute/timeout/jail @user <time> [reason]`, 'Timeout a member for a duration.'],
     [`${prefix}unmute/untimeout @user`, 'Remove a member timeout.'],
     [`${prefix}afk [reason]`, 'Set yourself AFK; it is removed when you return.'],
     [`${prefix}nick/ n @user <nickname>`, 'Change a member nickname.'],
     [`${prefix}clearnick/ cn @user`, 'Clear a member nickname.'],
     [`${prefix}serverinfo`, 'Show server statistics and icon.'],
-    [`${prefix}roleinfo @role`, 'Show role details and permissions in two columns.'],
+    [`${prefix}roleinfo [@role]`, 'Choose a role from a dropdown or show details for a specified role.'],
     [`${prefix}checkuser @user`, 'Show a normal member profile and tracked warnings received (Level 30+ role).'],
     [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
     [`${prefix}embed #HEX <message>`, 'Send multiline text, Markdown and mentions inside a custom-color embed; attach a photo to include it.'],
@@ -343,8 +384,14 @@ function commandList(prefix) {
     [`${prefix}say <message>`, 'Send a message as the bot while preserving spaces, line breaks and Discord formatting.'],
     [`${prefix}reply <message>`, 'Reply to the message you selected/replied to as the bot.'],
     [`${prefix}kick @user [reason]`, 'Kick a member and DM the kick card.'],
-    [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
+    [`${prefix}ban/execute @user [reason]`, 'Ban a member and DM the ban card.'],
+    [`${prefix}staff @user`, 'Give the Staff role to a member (Manage Roles required).'],
+    [`${prefix}poop @user`, 'Give the Poop role for five minutes (boosters or staff only).'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
+    [`${prefix}invite <10m|1h|1d|7d|never> [max uses]`, 'Create a server invite with a chosen expiry and optional use limit.'],
+    [`${prefix}Birthday @user`, 'Staff: assign the birthday role for one day.'],
+    [`${prefix}endbirthday @user`, 'Staff: remove the birthday role early.'],
+    [`${prefix}invite <10m|1h|1d|7d|never> [max uses]`, 'Create a server invite with a chosen expiry and optional use limit.'],
     [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
     [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
     [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3C User Report log to an existing channel.'],
@@ -353,10 +400,11 @@ function commandList(prefix) {
     [`${prefix}slap @user`, 'Slap a member.'],
     [`${prefix}ship @user @user`, 'Give two members a random compatibility score and GIF.'],
     [`${prefix}whisper/ w @user <message>`, 'Send a private whisper to a member by DM.'],
-    [`${prefix}blehhh @user <10s-30m>`, 'Give a member the Blehhh role for a temporary duration (boosters only).'],
+    [`${prefix}blehhh @user`, 'Give a member the Blehhh role for five minutes (boosters only).'],
     [`${prefix}unblehhh @user`, 'Remove the Blehhh role immediately (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
     [`${prefix}setupaudit #channel`, 'Connect 3C audit logs to an existing channel; never creates a new channel.'],
+    [`${prefix}webhook help`, 'Manage saved webhooks, custom embeds, link buttons, and scheduled announcements (Manage Webhooks required).'],
     [`${prefix}commands`, 'Show the full command list.'],
   ];
 }
@@ -498,20 +546,46 @@ client.on('guildAuditLogEntryCreate', (entry, guild) => {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initializeMongoDB();
+  recoverTemporaryRoles();
+  recoverSchedules(client, data, saveData);
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
+  // Register /commands per guild without deleting the server's other application commands.
+  if (TOKEN && BOT_APPLICATION_ID) {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    const command = new SlashCommandBuilder().setName('commands').setDescription('Show the 3C Bot command list.');
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        await rest.post(Routes.applicationGuildCommands(BOT_APPLICATION_ID, guild.id), { body: command.toJSON() });
+      } catch (error) {
+        console.error(`Could not register /commands in guild ${guild.id}:`, error.message);
+      }
+    }
+  }
   client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
 });
 
 // React to every message from a member currently holding the Blehhh role.
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.author.bot) return;
-  if (!message.member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
-  const emoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
-  if (emoji) await message.react(emoji).catch(() => {});
+  if (message.member?.roles.cache.has(BLEHHH_ROLE_ID)) {
+    const emoji = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'blehhh');
+    if (emoji) await message.react(emoji).catch(() => {});
+  }
+  if (message.member?.roles.cache.has(BIRTHDAY_ROLE_ID)) {
+    const cake = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'birthday_cake');
+    if (cake) await message.react(cake).catch(() => {});
+  }
+  // While the temporary Poop role is active, react to every message this member sends.
+  if (message.member?.roles.cache.has(POOP_ROLE_ID)) {
+    const poopEmoji = message.guild.emojis.cache.find(e => /poop|poo/i.test(e.name));
+    await message.react(poopEmoji || '💩').catch(() => {});
+  }
 });
 
 client.on('messageDelete', async (message) => {
   if (!message.guild || !message.author || message.author.bot) return;
+  // Webhook URLs are credentials: never copy webhook setup commands into snipe history.
+  if (/^\s*[!?]webhook\s+add\b/i.test(message.content || '')) return;
   const history = deletedSnipes.get(message.channel.id) || [];
   history.unshift({ authorId: message.author.id, authorTag: message.author.tag, content: message.content || '[no text]', attachments: [...message.attachments.values()].map(a => a.url), time: Date.now() });
   deletedSnipes.set(message.channel.id, history.slice(0, 50));
@@ -547,6 +621,12 @@ client.on('messageCreate', async (message) => {
   }
   const prefix = getPrefix(message.guild.id);
 
+  // Only greet an explicit tag of the configured bot application ID.
+  const botTagPattern = new RegExp(`<@!?${BOT_APPLICATION_ID}>`);
+  if (botTagPattern.test(message.content) && !message.content.trim().startsWith(prefix)) {
+    await message.channel.send(`Hi There! My prefix is ${prefix}`).catch(() => {});
+  }
+
   // Mention an AFK member.
   for (const user of message.mentions.users.values()) {
     const a = afk.get(key(message.guild.id, user.id));
@@ -570,10 +650,30 @@ client.on('messageCreate', async (message) => {
   const args = tokenize(body);
   const cmd = args.shift().toLowerCase();
 
-  const deleteCommand = ['warn','kick','ban','mute'].includes(cmd);
-  if (deleteCommand) await safeDelete(message);
+  if (cmd === 'webhook') {
+    return handleWebhookCommand({ message, args, data, saveData, client });
+  }
 
-  const target = message.mentions.members.first();
+  // ROBLOX RIVALS PRIVATE SERVER — post one of the owner-provided links in the server.
+  if (cmd === 'priv') {
+    const serverLinks = [
+      'https://www.roblox.com/share?code=8a1bc8d96cd92a40904d142b6ef12975&type=Server',
+      'https://www.roblox.com/share?code=4d349ea237c83a4ba4752394e347908e&type=Server',
+      'https://www.roblox.com/share?code=0cf4491fa4a34f4b8bba6f7120ebb5df&type=Server',
+      'https://www.roblox.com/share?code=f0d9e29386e81648b88399bfa7c89bef&type=Server'
+    ];
+    const randomLink = serverLinks[Math.floor(Math.random() * serverLinks.length)];
+    return message.channel.send(`### **🍀 Here Is A Private Server Link You Can Use🔥**\n${randomLink}`);
+  }
+
+  // Delete the invoking user's command message after a short delay; bot responses remain visible.
+  setTimeout(() => safeDelete(message), 5000);
+
+  let target = message.mentions.members.first();
+  if (!target) {
+    const rawTarget = args.map(x => x.match(/^<@!?(\d{15,25})>$/)?.[1] || x).find(x => /^\d{15,25}$/.test(x));
+    if (rawTarget && message.guild) target = await message.guild.members.fetch(rawTarget).catch(() => null);
+  }
 
   try {
     // FUN GIF REACTIONS
@@ -691,7 +791,7 @@ client.on('messageCreate', async (message) => {
       }
 
       await safeDelete(message);
-      return message.channel.send('🤫 whisper sent').then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+      return message.channel.send('🤫 whisper sent').catch(() => {});
     }
 
     // BLEHHH
@@ -710,14 +810,10 @@ client.on('messageCreate', async (message) => {
       }
 
       if (!target) {
-        return sendTemp(message.channel, `Usage: ${prefix}blehhh @user <10s-30m>`, 6000);
+        return sendTemp(message.channel, `Usage: ${prefix}blehhh @user`, 6000);
       }
 
-      const durationInput = args.find(x => /^\d+(?:\.\d+)?(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes)$/i.test(x));
-      const duration = parseDuration(durationInput);
-      if (!duration || duration < BLEHHH_MIN_MS || duration > BLEHHH_MAX_MS) {
-        return sendTemp(message.channel, '❌ Blehhh time must be between **10s and 30m**.', 6000);
-      }
+      const duration = TEMP_ROLE_DURATION_MS;
 
       const cooldownKey = key(message.guild.id, message.author.id);
       const now = Date.now();
@@ -751,16 +847,15 @@ client.on('messageCreate', async (message) => {
         if (blehhhEmoji) await message.react(blehhhEmoji).catch(() => {});
         else await message.react('😛').catch(() => {});
 
-        const timer = setTimeout(async () => {
-          blehhhTimers.delete(timerKey);
-          const freshMember = await message.guild.members.fetch(target.id).catch(() => null);
-          if (freshMember?.roles.cache.has(blehhhRole.id)) {
-            await freshMember.roles.remove(blehhhRole, 'Blehhh duration expired').catch(() => {});
-          }
-        }, duration);
-        blehhhTimers.set(timerKey, timer);
+        const expiryKey = `${message.guild.id}:${target.id}:${blehhhRole.id}`;
+        data.temporaryRoles[expiryKey] = {
+          guildId: message.guild.id, userId: target.id, roleId: blehhhRole.id,
+          expiresAt: Date.now() + duration, reason: 'Blehhh duration expired'
+        };
+        saveData();
+        scheduleTemporaryRoleExpiry(message.guild.id, target.id, blehhhRole.id, data.temporaryRoles[expiryKey].expiresAt, 'Blehhh duration expired');
 
-        return sendTemp(message.channel, `😛 ${target} has **blehhh** for **${prettyDuration(duration)}**!`, 5000);
+        return sendTemp(message.channel, `😛 ${target} has **5 minutes** of blehhh!`, 5000);
       } catch (err) {
         console.error('Blehhh role error:', err);
         return sendTemp(message.channel, '❌ I could not give the **blehhh** role. Check my role position and Manage Roles permission.', 6000);
@@ -779,6 +874,12 @@ client.on('messageCreate', async (message) => {
       const timer = blehhhTimers.get(timerKey);
       if (timer) clearTimeout(timer);
       blehhhTimers.delete(timerKey);
+      const expiryKey = `${message.guild.id}:${target.id}:${role.id}`;
+      const roleExpiryTimer = temporaryRoleTimers.get(expiryKey);
+      if (roleExpiryTimer) clearTimeout(roleExpiryTimer);
+      temporaryRoleTimers.delete(expiryKey);
+      delete data.temporaryRoles[expiryKey];
+      saveData();
       await target.roles.remove(role, `Unblehhh by ${message.author.tag}`).catch(() => {});
       await auditLog(message.guild, '😛 Member Unblehhh’d', `${target.user} was unblehhh’d by ${message.author}.`, 0x5865F2);
       return sendTemp(message.channel, `✅ ${target} is no longer **blehhh**.`, 5000);
@@ -846,9 +947,9 @@ client.on('messageCreate', async (message) => {
     }
 
     // WARN
-    if (cmd === 'warn') {
+    if (cmd === 'warn' || cmd === 'shout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
-      if (!target) return sendTemp(message.channel, `Usage: ${prefix}warn @user [reason]`, 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}warn/shout @user [reason]`, 5000);
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot warn that member because of role hierarchy.', 5000);
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       const list = warningsFor(message.guild.id, target.id);
@@ -859,7 +960,9 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '⚠️ Member Warned', `${target.user} was warned by ${message.author}.`, 0xF39C12, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`⚠️ **${target.user.tag}** was warned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      return message.channel.send(
+        `## ⚠️ **WARNED!**\n${target.user} has been warned for **${reason || 'No reason provided'}**. You Better Not Do It Again!`
+      ).catch(() => {});
     }
 
     // UNWARN
@@ -891,23 +994,28 @@ client.on('messageCreate', async (message) => {
       return message.channel.send({ embeds: [e] });
     }
 
-    // MUTE / UNMUTE
-    if (cmd === 'mute' || cmd === 'timeout') {
+    // MUTE / TIMEOUT / JAIL
+    if (cmd === 'mute' || cmd === 'timeout' || cmd === 'jail') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
-      if (!target) return sendTemp(message.channel, `Usage: ${prefix}mute @user <time> [reason]`, 5000);
-      if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot mute that member because their highest role is equal to or higher than my bot role.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}${cmd} @user <time> [reason]`, 5000);
+      if (!canAct(message.member, target) || !canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot moderate that member because of role hierarchy.', 5000);
       const durationArg = args.find(x => /^\d+(?:\.\d+)?(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/i.test(x));
       const ms = parseTime(durationArg);
-      if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Mute time must be between 1s and 28d, e.g. `10m`.', 5000);
-      const reason = cleanReason(args.slice(1));
+      if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, `❌ ${cmd === 'jail' ? 'Jail' : 'Timeout'} duration must be between 1 second and 28 days, e.g. \`10m\` or \`7d\`. Discord's timeout limit is 28 days.`, 7000);
+      const reason = cleanReason(args.filter(x => x !== durationArg && !/^<@!?\d+>$/.test(x)));
+      const endsAt = Date.now() + ms;
       await target.timeout(ms, reason || undefined);
       recordStaffAction(message.guild.id, message.author.id, 'timeout', target.id, reason, '3c');
       await dmModeration(target.user, message.guild, 'mute', message.author, reason);
-      await auditLog(message.guild, '🔇 Member Muted', `${target.user} was muted by ${message.author}.`, 0x95A5A6, [
+      await auditLog(message.guild, cmd === 'jail' ? '🔒 Member Jailed' : '🔇 Member Timed Out', `${target.user} was ${cmd === 'jail' ? 'jailed' : 'timed out'} by ${message.author}.`, 0x95A5A6, [
         { name: 'Duration', value: prettyDuration(ms) },
+        { name: 'Return time', value: new Date(endsAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) },
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`🔇 **${target.user.tag}** was muted for **${prettyDuration(ms)}**${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      const actionLabel = cmd === 'jail' ? 'JAILED' : 'TIMEOUT ACTIVATED';
+      return message.channel.send(
+        `## **${cmd === 'jail' ? '🔫 OFF TO JAIL THEM' : '🔇 TIMEOUT ACTIVATED'}**\n${target.user} has been ${cmd === 'jail' ? 'jailed' : 'put in timeout'} for **${prettyDuration(ms)}**. They will be back on <t:${Math.floor(endsAt / 1000)}:F> at <t:${Math.floor(endsAt / 1000)}:t>. ${cmd === 'jail' ? 'CRIMINAL!' : ''}${reason ? `\n**Reason:** ${reason}` : ''}`
+      ).catch(() => {});
     }
     if (cmd === 'unmute' || cmd === 'untimeout') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ModerateMembers)) return sendTemp(message.channel, '❌ You need **Moderate Members** permission.', 5000);
@@ -965,8 +1073,17 @@ client.on('messageCreate', async (message) => {
       const roleToken = args.find(x => /^\d{15,25}$/.test(x));
       const role = roleMention || (roleToken ? message.guild.roles.cache.get(roleToken) : null) ||
         (args.length ? findRole(message.guild, args.join(' ')) : null);
-      if (!role) return sendTemp(message.channel, `Usage: ${prefix}roleinfo @role (or provide a role ID/name)`, 6000);
-      const orderedRoles = [...message.guild.roles.cache.values()].sort((a, b) => b.position - a.position);
+      const orderedRoles = [...message.guild.roles.cache.values()].filter(r => r.id !== message.guild.id).sort((a, b) => b.position - a.position);
+      if (!role) {
+        const options = orderedRoles.slice(0, 25).map(r => ({
+          label: truncate(r.name, 100) || 'Unnamed role',
+          value: r.id,
+          description: truncate(`Members: ${r.members.size} • Position: ${r.position}`, 100)
+        }));
+        if (!options.length) return sendTemp(message.channel, '❌ No roles are available to display.', 5000);
+        const menu = new StringSelectMenuBuilder().setCustomId('roleinfo:select').setPlaceholder('Select a role to view its information').addOptions(options);
+        return message.channel.send({ content: 'Choose a role from the list:', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
       const positionFromTop = orderedRoles.findIndex(r => r.id === role.id) + 1;
       const permissionNames = role.permissions.toArray().map(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' '));
       const leftPermissions = permissionNames.filter((_, i) => i % 2 === 0);
@@ -982,6 +1099,101 @@ client.on('messageCreate', async (message) => {
     }
 
     // ROLE
+    if (cmd === 'poop') {
+      const freshInvoker = await message.guild.members.fetch(message.author.id).catch(() => message.member);
+      const allowed = freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
+        freshInvoker.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID) ||
+        freshInvoker.roles.cache.has(STAFF_ROLE_ID);
+      if (!allowed) return sendTemp(message.channel, '❌ Only boosters or staff can use this command.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}poop @user`, 5000);
+      const role = message.guild.roles.cache.get(POOP_ROLE_ID);
+      if (!role) return sendTemp(message.channel, '❌ I could not find the Poop role. Check the role ID.', 5000);
+      const botMember = message.guild.members.me;
+      if (role.managed || !botMember || role.position >= botMember.roles.highest.position) {
+        return sendTemp(message.channel, '❌ I cannot give the Poop role. Move my bot role above it.', 5000);
+      }
+      try {
+        await target.roles.add(role, `Pooped by ${message.author.tag} for 5 minutes`);
+        const poopEmoji = message.guild.emojis.cache.find(e => /poop|poo/i.test(e.name));
+        if (poopEmoji) await message.react(poopEmoji).catch(() => {});
+        else await message.react('💩').catch(() => {});
+        const expiryKey = `${message.guild.id}:${target.id}:${role.id}`;
+        data.temporaryRoles[expiryKey] = {
+          guildId: message.guild.id, userId: target.id, roleId: role.id,
+          expiresAt: Date.now() + TEMP_ROLE_DURATION_MS, reason: 'Poop role duration expired'
+        };
+        saveData();
+        scheduleTemporaryRoleExpiry(message.guild.id, target.id, role.id, data.temporaryRoles[expiryKey].expiresAt, 'Poop role duration expired');
+        await auditLog(message.guild, '💩 Member Pooped', `${target.user} was given the Poop role by ${message.author} for 5 minutes.`, 0xD6A46B);
+        return sendTemp(message.channel, `💩 ${target} has been pooped for **5 minutes**!`, 5000);
+      } catch (error) {
+        console.error('Poop role error:', error);
+        return sendTemp(message.channel, '❌ I could not give the Poop role. Check my Manage Roles permission and role position.', 5000);
+      }
+    }
+
+    // BIRTHDAY ROLE — staff only, expires automatically after one day.
+    if (cmd === 'birthday') {
+      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only staff can use this command.', 5000);
+      if (!target) return sendTemp(message.channel, '❌ Mention a server member: !Birthday @user', 5000);
+      const role = message.guild.roles.cache.get(BIRTHDAY_ROLE_ID);
+      const botMember = message.guild.members.me;
+      if (!role || !botMember || role.managed || role.position >= botMember.roles.highest.position) {
+        return sendTemp(message.channel, '❌ I cannot assign the birthday role. Check the role ID and move my bot role above it.', 6000);
+      }
+      try {
+        await target.roles.add(role, `Birthday role assigned by ${message.author.tag} for 1 day`);
+        const expiryKey = `${message.guild.id}:${target.id}:${role.id}`;
+        data.temporaryRoles[expiryKey] = {
+          guildId: message.guild.id, userId: target.id, roleId: role.id,
+          expiresAt: Date.now() + BIRTHDAY_DURATION_MS, reason: 'Birthday role expired after one day'
+        };
+        saveData();
+        scheduleTemporaryRoleExpiry(message.guild.id, target.id, role.id, data.temporaryRoles[expiryKey].expiresAt, 'Birthday role expired after one day');
+        const cake = message.guild.emojis.cache.find(e => e.name.toLowerCase() === 'birthday_cake');
+        if (cake) await message.react(cake).catch(() => {});
+        return sendTemp(message.channel, `🎂 ${target} has received the birthday role for **1 day**! Happy birthday!`, 6000);
+      } catch (error) {
+        console.error('Birthday role error:', error);
+        return sendTemp(message.channel, '❌ I could not assign the birthday role. Check Manage Roles and role hierarchy.', 6000);
+      }
+    }
+
+    if (cmd === 'endbirthday') {
+      if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only staff can use this command.', 5000);
+      if (!target) return sendTemp(message.channel, '❌ Mention the member: !endbirthday @user', 5000);
+      const role = message.guild.roles.cache.get(BIRTHDAY_ROLE_ID);
+      const expiryKey = `${message.guild.id}:${target.id}:${BIRTHDAY_ROLE_ID}`;
+      const timer = temporaryRoleTimers.get(expiryKey);
+      if (timer) clearTimeout(timer);
+      temporaryRoleTimers.delete(expiryKey);
+      delete data.temporaryRoles[expiryKey];
+      try {
+        if (role && target.roles.cache.has(BIRTHDAY_ROLE_ID)) await target.roles.remove(role, `Birthday role ended by ${message.author.tag}`);
+        saveData();
+        return sendTemp(message.channel, `✅ Ended ${target}'s birthday role.`, 5000);
+      } catch (error) {
+        console.error('End birthday error:', error);
+        return sendTemp(message.channel, '❌ I could not remove the birthday role. Check Manage Roles and role hierarchy.', 6000);
+      }
+    }
+
+    if (cmd === 'staff') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageRoles)) return sendTemp(message.channel, '❌ You need **Manage Roles** permission.', 5000);
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}staff @user`, 5000);
+      const role = message.guild.roles.cache.get(STAFF_ROLE_ID);
+      if (!role) return sendTemp(message.channel, '❌ I could not find the Staff role.', 5000);
+      const botMember = message.guild.members.me;
+      if (role.managed || !botMember || role.position >= botMember.roles.highest.position) return sendTemp(message.channel, '❌ I cannot assign the Staff role. Move my bot role above it.', 5000);
+      if (message.author.id !== message.guild.ownerId && (target.roles.highest.position >= message.member.roles.highest.position || role.position >= message.member.roles.highest.position)) {
+        return sendTemp(message.channel, '❌ You can only manage members and roles below your highest role.', 5000);
+      }
+      if (target.roles.cache.has(role.id)) return sendTemp(message.channel, `ℹ️ ${target} already has the Staff role.`, 5000);
+      await target.roles.add(role, `Staff role granted by ${message.author.tag}`);
+      await auditLog(message.guild, '🛡️ Staff Role Granted', `${message.author} gave the Staff role to ${target}.`, 0x57F287);
+      return sendTemp(message.channel, `✅ ${target} has been given the Staff role.`, 5000);
+    }
+
     if (cmd === 'role' || cmd === 'r') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageRoles)) return sendTemp(message.channel, '❌ You need **Manage Roles** permission.', 5000);
       const action = (args.shift() || '').toLowerCase();
@@ -1205,13 +1417,20 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '👢 Member Kicked', `${target.user} was kicked by ${message.author}.`, 0xE67E22, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`👢 **${target.user.tag}** was kicked${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      const kickEmbed = new EmbedBuilder()
+        .setColor(0xE67E22)
+        .setTitle('👢 OUT YOU GO!')
+        .setDescription(`**${target.user.tag}** has been kicked from the server.`)
+        .addFields({ name: 'Reason', value: reason || 'No reason provided.' }, { name: 'Moderator', value: `${message.author}`, inline: true })
+        .setFooter({ text: '3C Bot • Moderation action' })
+        .setTimestamp();
+      return message.channel.send({ embeds: [kickEmbed] }).catch(() => {});
     }
 
     // BAN
-    if (cmd === 'ban') {
+    if (cmd === 'ban' || cmd === 'execute') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
-      if (!target) return sendTemp(message.channel, `Usage: ${prefix}ban @user [reason]`, 5000);
+      if (!target) return sendTemp(message.channel, '❌ Mention a current server member to ban.', 5000);
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot ban that member because of role hierarchy.', 5000);
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'ban', message.author, reason);
@@ -1220,19 +1439,66 @@ client.on('messageCreate', async (message) => {
       await auditLog(message.guild, '🔨 Member Banned', `${target.user} was banned by ${message.author}.`, 0xE74C3C, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
-      return message.channel.send(`🔨 **${target.user.tag}** was banned${reason ? ` — ${reason}` : ''}.`).catch(() => {});
+      return message.channel.send(
+        `## **🪓 OFF TO CHOP THEIR HEAD 🪓**\n${target.user} has been executed! They have been **Banned**. *Justice Has Been Served!*${reason ? `\n**Reason:** ${reason}` : ''}`
+      ).catch(() => {});
     }
 
-    // UNBAN
+    // UNBAN — accepts resolved mentions, raw mention syntax, and plain user IDs.
     if (cmd === 'unban') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.BanMembers)) return sendTemp(message.channel, '❌ You need **Ban Members** permission.', 5000);
-      const id = message.mentions.users.first()?.id || args.find(x => /^\d{15,25}$/.test(x));
-      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban @user (or user ID)`, 5000);
-      const ban = await message.guild.bans.fetch(id).catch(() => null);
-      if (!ban) return sendTemp(message.channel, '❌ That member is not banned.', 5000);
-      await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
+      const rawId = args.map(x => {
+        const mention = x.match(/^<@!?(\d{15,25})>$/);
+        return mention ? mention[1] : x;
+      }).find(x => /^\d{15,25}$/.test(x));
+      const id = message.mentions.users.first()?.id || rawId;
+      if (!/^\d{15,25}$/.test(id || '')) return sendTemp(message.channel, `Usage: ${prefix}unban @user or ${prefix}unban USER_ID`, 6000);
+      let ban;
+      try {
+        ban = await message.guild.bans.fetch(id);
+      } catch (error) {
+        console.error('Unban lookup failed:', error);
+        return sendTemp(message.channel, '❌ I could not check that ban. Check my **Ban Members** permission and try again.', 6000);
+      }
+      if (!ban) return sendTemp(message.channel, '❌ That user is not currently banned from this server.', 6000);
+      try {
+        await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
+      } catch (error) {
+        console.error('Unban action failed:', error);
+        return sendTemp(message.channel, '❌ I found the ban but could not remove it. Check my **Ban Members** permission.', 6000);
+      }
       recordStaffAction(message.guild.id, message.author.id, 'unban', id, `Unbanned by ${message.author.tag}`, '3c');
-      return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}**.`, 6000);
+      return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}** (${id}).`, 6000);
+    }
+
+    // CREATE SERVER INVITE — usage: !invite <10m|1h|1d|7d|never> [max uses]
+    if (cmd === 'invite' || cmd === 'createinvite') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.CreateInstantInvite)) return sendTemp(message.channel, '❌ You need **Create Invite** permission.', 5000);
+      if (!message.channel || !message.channel.isTextBased() || !message.channel.createInvite) return sendTemp(message.channel, '❌ I cannot create an invite from this channel.', 5000);
+      const durationText = (args[0] || '1h').toLowerCase();
+      const durationMap = { '10m': 600, '1h': 3600, '1d': 86400, '7d': 604800, 'never': 0 };
+      if (!Object.prototype.hasOwnProperty.call(durationMap, durationText)) {
+        return sendTemp(message.channel, `Usage: ${prefix}invite <10m|1h|1d|7d|never> [max uses]`, 7000);
+      }
+      const maxUses = args[1] === undefined ? 0 : Number(args[1]);
+      if (!Number.isInteger(maxUses) || maxUses < 0 || maxUses > 100) return sendTemp(message.channel, `❌ Max uses must be 0 (unlimited) or a number from 1 to 100. Example: ${prefix}invite 1d 10`, 7000);
+      try {
+        const invite = await message.channel.createInvite({
+          maxAge: durationMap[durationText],
+          maxUses,
+          unique: true,
+          reason: `Invite created by ${message.author.tag} using 3C Bot`
+        });
+        const expiryLabel = durationText === 'never' ? 'Never (no expiry)' : durationText;
+        const usesLabel = maxUses === 0 ? 'Unlimited' : String(maxUses);
+        return message.channel.send({
+          content: `🔗 **Server invite created!**\n${invite.url}\n**Expires:** ${expiryLabel}\n**Max uses:** ${usesLabel}\n**Created by:** ${message.author}`,
+          allowedMentions: { users: [message.author.id] }
+        });
+      } catch (error) {
+        console.error('Invite creation failed:', error);
+        return sendTemp(message.channel, '❌ I could not create the invite. Check my **Create Invite** permission in this channel.', 6000);
+      }
     }
 
     // PURGE USER
@@ -1302,7 +1568,7 @@ client.on('messageCreate', async (message) => {
       data.reportCooldowns[cooldownKey] = until;
       saveData();
       await safeDelete(message);
-      return message.channel.send('report successfully submitted').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      return message.channel.send('report successfully submitted').catch(() => {});
     }
 
     // REPORT LOG SETUP — connect to an existing channel only; never create a channel.
@@ -1381,10 +1647,10 @@ client.on('messageCreate', async (message) => {
     // HELP / COMMANDS
     if (cmd === 'commands') {
       const pages = [
-        ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
-        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
+        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/jail','unmute/untimeout','kick','ban/execute','unban']],
+        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','roleinfo','staff','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server', ['ticket','multipleticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','poop','afk','help']]
       ];
       const [title, keys] = pages[0];
       const lines = keys.map(k => {
@@ -1493,14 +1759,58 @@ client.on('messageCreate', async (message) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.customId?.startsWith('whpanel:')) { const handled = await handleWebhookInteraction(interaction, { data, saveData, client }); if (handled) return; }
+    if (interaction.isChatInputCommand() && interaction.commandName === 'commands') {
+      const prefix = getPrefix(interaction.guildId);
+      const pages = [
+        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/jail','unmute/untimeout','kick','ban/execute','unban']],
+        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','roleinfo','staff','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server', ['ticket','multipleticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','poop','afk','help']]
+      ];
+      const [title, keys] = pages[0];
+      const lines = keys.map(k => {
+        const f = commandList(prefix).find(([a]) => a.includes(k));
+        return f ? `**${f[0]}** — ${f[1]}` : `**${prefix}${k}**`;
+      });
+      const e = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(title)
+        .setDescription(lines.join('\\n'))
+        .setFooter({ text: `Page 1/${pages.length} • Prefix: ${prefix}` });
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('commands:prev:0').setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId('commands:home:0').setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('commands:next:0').setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary)
+      );
+      return interaction.reply({ embeds: [e], components: [row], ephemeral: true });
+    }
+    if (interaction.isStringSelectMenu() && interaction.customId === 'roleinfo:select') {
+      const role = interaction.guild?.roles.cache.get(interaction.values[0]);
+      if (!role) return interaction.reply({ content: '❌ That role could not be found.', ephemeral: true });
+      const orderedRoles = [...interaction.guild.roles.cache.values()].filter(r => r.id !== interaction.guild.id).sort((a, b) => b.position - a.position);
+      const positionFromTop = orderedRoles.findIndex(r => r.id === role.id) + 1;
+      const permissionNames = role.permissions.toArray().map(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' '));
+      const leftPermissions = permissionNames.filter((_, i) => i % 2 === 0);
+      const rightPermissions = permissionNames.filter((_, i) => i % 2 === 1);
+      const permissionText = list => truncate(list.join('\\n') || 'No permissions', 1024);
+      const embed = new EmbedBuilder().setColor(role.color || 0x5865F2).setTitle('🎭 Role Information')
+        .setDescription(`**Role:** ${role}\\n**Role ID:** \`${role.id}\`\\n**Hoisted:** ${role.hoist ? 'Yes' : 'No'}\\n**Mentionable:** ${role.mentionable ? 'Yes' : 'No'}\\n**Position from top:** ${positionFromTop} of ${orderedRoles.length}\\n**Created:** <t:${Math.floor(role.createdTimestamp / 1000)}:F>`)
+        .addFields(
+          { name: 'Permissions · 1', value: permissionText(leftPermissions), inline: true },
+          { name: 'Permissions · 2', value: permissionText(rightPermissions), inline: true }
+        ).setFooter({ text: `Role ID: ${role.id}` });
+      return interaction.update({ content: null, embeds: [embed], components: [] });
+    }
+
     if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
       const [, action, currentRaw] = interaction.customId.split(':');
       const current = Number(currentRaw) || 0;
       const pages = [
-        ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
-        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
+        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/jail','unmute/untimeout','kick','ban/execute','unban']],
+        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','roleinfo','staff','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server', ['ticket','multipleticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','poop','afk','help']]
       ];
 
       let next = current;
