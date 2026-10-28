@@ -1761,7 +1761,29 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.customId?.startsWith('whpanel:')) { const handled = await handleWebhookInteraction(interaction, { data, saveData, client }); if (handled) return; }
     if (interaction.isChatInputCommand() && interaction.commandName === 'commands') {
-      return interaction.reply({ content: '**3C Bot Commands**\n`!warn` `!unwarn` `!warnings` `!jail` `!mute` `!unmute` `!kick` `!execute` `!unban` `!invite` `!Birthday` `!endbirthday` `!poop` `!ticket` `!multipleticket` `!closeticket` `!serverinfo` `!prefix` `!help`', ephemeral: true });
+      const prefix = getPrefix(interaction.guildId);
+      const pages = [
+        ['🛡️ 3C Moderation', ['warn/shout','unwarn','warnings','mute/timeout/jail','unmute/untimeout','kick','ban/execute','unban']],
+        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','roleinfo','staff','slowmode','lock','unlock']],
+        ['🎟️ 3C Tickets & Server', ['ticket','multipleticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','poop','afk','help']]
+      ];
+      const [title, keys] = pages[0];
+      const lines = keys.map(k => {
+        const f = commandList(prefix).find(([a]) => a.includes(k));
+        return f ? `**${f[0]}** — ${f[1]}` : `**${prefix}${k}**`;
+      });
+      const e = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(title)
+        .setDescription(lines.join('\\n'))
+        .setFooter({ text: `Page 1/${pages.length} • Prefix: ${prefix}` });
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('commands:prev:0').setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId('commands:home:0').setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('commands:next:0').setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary)
+      );
+      return interaction.reply({ embeds: [e], components: [row], ephemeral: true });
     }
     if (interaction.isStringSelectMenu() && interaction.customId === 'roleinfo:select') {
       const role = interaction.guild?.roles.cache.get(interaction.values[0]);
