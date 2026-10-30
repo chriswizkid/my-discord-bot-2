@@ -473,6 +473,25 @@ function commandList(prefix) {
   ];
 }
 
+function buildCommandsPayload(prefix, requestedPage = 0) {
+  const commands = commandList(prefix);
+  const pageSize = 8;
+  const pageCount = Math.max(1, Math.ceil(commands.length / pageSize));
+  const page = Math.max(0, Math.min(pageCount - 1, Number(requestedPage) || 0));
+  const entries = commands.slice(page * pageSize, (page + 1) * pageSize);
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle('📜 3C Bot Commands')
+    .setDescription(entries.map(([usage, description]) => `**${usage}** — ${description}`).join('\\n'))
+    .setFooter({ text: `Page ${page + 1}/${pageCount} • ${commands.length} commands • Prefix: ${prefix}` });
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`commands:prev:${page}`).setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId(`commands:home:${page}`).setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`commands:next:${page}`).setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1)
+  );
+  return { embeds: [embed], components: [row] };
+}
+
 const slashCommandSpecs = [
   ['warn','Warn a member.'],['unwarn','Remove a warning from a member.'],['warnings','View a member’s warnings.'],
   ['mute','Timeout a member.'],['unmute','Remove a member timeout.'],['afk','Set your AFK status.'],
@@ -508,32 +527,9 @@ async function dispatchSlashCommand(interaction) {
   await interaction.deferReply();
   const command=interaction.commandName;
 
-  // Render /commands directly as an interaction response instead of routing it
-  // through the prefix-command message adapter.
+  // Render the complete command registry with pagination.
   if (command === 'commands') {
-    const prefix = getPrefix(interaction.guildId);
-    const pages = [
-      ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-      ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-      ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply','webhook']],
-      ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','67','help']]
-    ];
-    const [title, keys] = pages[0];
-    const lines = keys.map(k => {
-      const found = commandList(prefix).find(([name]) => name.includes(k));
-      return found ? `**${found[0]}** — ${found[1]}` : `**${prefix}${k}**`;
-    });
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle(title)
-      .setDescription(lines.join('\\n'))
-      .setFooter({ text: `Page 1/${pages.length} • Prefix: ${prefix}` });
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('commands:prev:0').setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(true),
-      new ButtonBuilder().setCustomId('commands:home:0').setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('commands:next:0').setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary)
-    );
-    return interaction.editReply({ embeds: [embed], components: [row] });
+    return interaction.editReply(buildCommandsPayload(getPrefix(interaction.guildId), 0));
   }
   const args=interaction.options.getString('args')||'';
   const user=interaction.options.getUser('user');
@@ -1665,30 +1661,7 @@ async function handleCommandMessage(message) {
     }
     // HELP / COMMANDS
     if (cmd === 'commands') {
-      const pages = [
-        ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply','webhook']],
-        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','67','help']]
-      ];
-      const [title, keys] = pages[0];
-      const lines = keys.map(k => {
-        const f = commandList(prefix).find(([a]) => a.includes(k));
-        return f ? `**${f[0]}** — ${f[1]}` : `**${prefix}${k}**`;
-      });
-      const e = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(title)
-        .setDescription(lines.join('\n'))
-        .setFooter({ text: `Page 1/${pages.length} • Prefix: ${prefix}` });
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('commands:prev:0').setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(true),
-        new ButtonBuilder().setCustomId('commands:home:0').setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('commands:next:0').setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary)
-      );
-
-      return message.channel.send({ embeds: [e], components: [row] });
+      return message.channel.send(buildCommandsPayload(prefix, 0));
     }
     if (cmd === 'embed') {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
@@ -1794,38 +1767,13 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
       const [, action, currentRaw] = interaction.customId.split(':');
       const current = Number(currentRaw) || 0;
-      const pages = [
-        ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
-        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
-      ];
-
+      const prefix = getPrefix(interaction.guildId);
+      const pageCount = Math.max(1, Math.ceil(commandList(prefix).length / 8));
       let next = current;
-      if (action === 'next') next = Math.min(pages.length - 1, current + 1);
+      if (action === 'next') next = Math.min(pageCount - 1, current + 1);
       if (action === 'prev') next = Math.max(0, current - 1);
       if (action === 'home') next = 0;
-
-      const prefix = getPrefix(interaction.guildId);
-      const [title, keys] = pages[next];
-      const lines = keys.map(k => {
-        const f = commandList(prefix).find(([a]) => a.includes(k));
-        return f ? `**${f[0]}** — ${f[1]}` : `**${prefix}${k}**`;
-      });
-
-      const e = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(title)
-        .setDescription(lines.join('\n'))
-        .setFooter({ text: `Page ${next + 1}/${pages.length} • Prefix: ${prefix}` });
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`commands:prev:${next}`).setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(next === 0),
-        new ButtonBuilder().setCustomId(`commands:home:${next}`).setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`commands:next:${next}`).setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(next === pages.length - 1)
-      );
-
-      return interaction.update({ embeds: [e], components: [row] });
+      return interaction.update(buildCommandsPayload(prefix, next));
     }
 
     // WEBHOOK STUDIO — all actions are permission-checked and scoped to saved webhooks.
