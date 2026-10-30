@@ -1964,7 +1964,7 @@ client.on('interactionCreate', async (interaction) => {
       const id=interaction.customId.split(':')[3],record=findSavedWebhook(id);
       if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
       const dateText=interaction.fields.getTextInputValue('webhook:runat').trim();
-      if(!/(Z|[+-]\\d{2}:\\d{2})$/i.test(dateText))return interaction.reply({content:'❌ Include a timezone, e.g. 2026-11-01T18:30+05:30.',ephemeral:true});
+      if(!/(Z|[+-]\d{2}:\d{2})$/i.test(dateText))return interaction.reply({content:'❌ Include a timezone, e.g. 2026-11-01T18:30+05:30.',ephemeral:true});
       const runAt=Date.parse(dateText);
       if(!Number.isFinite(runAt)||runAt<=Date.now())return interaction.reply({content:'❌ Enter a valid future date and time.',ephemeral:true});
       const content=interaction.fields.getTextInputValue('webhook:content').trim();
