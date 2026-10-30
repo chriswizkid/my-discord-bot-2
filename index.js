@@ -540,7 +540,30 @@ const slashCommandSpecs = [
 ['commands','Show all bot commands.',[]],
 ['67','Give the 67 effect.',[S('action','Action',true,{choices:[{name:'Give',value:'give'}]}),U('member','Member')]]
 ];
-const slashCommands = slashCommandSpecs.map(([name,description,options]) => ({name,description,options}));
+const slashPermissionDefaults = {
+  warn: 'ModerateMembers', unwarn: 'ModerateMembers', warnings: 'ModerateMembers',
+  mute: 'ModerateMembers', unmute: 'ModerateMembers',
+  kick: 'KickMembers', ban: 'BanMembers', unban: 'BanMembers',
+  nick: 'ManageNicknames', clearnick: 'ManageNicknames',
+  role: 'ManageRoles',
+  prefix: 'ManageGuild', setupaudit: 'ManageGuild', setupreportlog: 'ManageGuild',
+  slowmode: 'ManageChannels', lock: 'ManageChannels', unlock: 'ManageChannels',
+  purge: 'ManageMessages', panelbutton: 'ManageMessages',
+  webhook: 'ManageWebhooks', embed: 'ManageMessages', say: 'ManageGuild', reply: 'ManageGuild',
+  ticket: 'ManageGuild', multipleticket: 'ManageGuild',
+  // Role-gated commands are hidden by default. Server admins must allow the exact roles
+  // under Server Settings > Integrations > 3C Bot > Manage.
+  blehhh: '0', unblehhh: '0', '67': '0', checkuser: '0', modcheck: '0'
+};
+const slashCommands = slashCommandSpecs.map(([name,description,options]) => {
+  const requiredPermission = slashPermissionDefaults[name];
+  const default_member_permissions = requiredPermission === '0'
+    ? '0'
+    : requiredPermission
+      ? PermissionsBitField.Flags[requiredPermission].toString()
+      : undefined;
+  return {name,description,options, ...(default_member_permissions !== undefined ? {default_member_permissions} : {})};
+});
 
 async function dispatchSlashCommand(interaction) {
   await interaction.deferReply();
