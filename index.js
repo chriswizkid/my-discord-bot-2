@@ -692,6 +692,17 @@ client.on('messageDelete', async (message) => {
   } catch(error) { console.error('Snipe capture error:',error); }
 });
 
+client.on('messageDeleteBulk', async (messages) => {
+  try {
+    for(const message of messages.values()){
+      if(!message.guild||!message.author||message.author.bot)continue;
+      const history=deletedSnipes.get(message.channel.id)||[];
+      history.unshift({id:message.id,authorId:message.author.id,authorTag:message.author.tag,content:message.content||'[no text]',attachments:[...message.attachments.values()].map(a=>a.url),time:Date.now()});
+      deletedSnipes.set(message.channel.id,history.slice(0,100));
+    }
+  } catch(error) { console.error('Bulk snipe capture error:',error); }
+});
+
 client.on('messageUpdate', async (oldMessage, newMessage) => {
   if (!oldMessage.guild || oldMessage.author?.bot) return;
   if (oldMessage.partial || newMessage.partial) return;
@@ -1406,7 +1417,7 @@ async function handleCommandMessage(message) {
       if(!role||me.roles.highest.position<=role.position)return sendTemp(message.channel,'❌ I cannot manage the configured 67 NOOBBB role. Check its position above the bot.',6000);
       const effectKey=key(message.guild.id,target.id),existing=data.active67?.[effectKey];
       try{
-        if(!existing)data.active67[effectKey]={previousNickname:target.nickname,expiresAt:Date.now()+300000};
+        if(!existing)data.active67[effectKey]={previousNickname:target.nickname,hadRole:target.roles.cache.has('1565764777010139346'),expiresAt:Date.now()+300000};
         else data.active67[effectKey].expiresAt=Date.now()+300000;
         await target.roles.add(role,`67 effect activated by ${message.author.tag}`);
         await target.setNickname('677 NOOB LOL',`67 effect activated by ${message.author.tag}`);
