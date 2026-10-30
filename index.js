@@ -694,9 +694,11 @@ client.on('messageDelete', async (message) => {
 
 client.on('messageDeleteBulk', async (messages) => {
   try {
-    for(const message of messages.values()){
+    const ordered=[...messages.values()].sort((a,b)=>a.createdTimestamp-b.createdTimestamp);
+    for(const message of ordered){
       if(!message.guild||!message.author||message.author.bot)continue;
       const history=deletedSnipes.get(message.channel.id)||[];
+      if(history.some(item=>item.id===message.id))continue;
       history.unshift({id:message.id,authorId:message.author.id,authorTag:message.author.tag,content:message.content||'[no text]',attachments:[...message.attachments.values()].map(a=>a.url),time:Date.now()});
       deletedSnipes.set(message.channel.id,history.slice(0,100));
     }
