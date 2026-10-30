@@ -533,7 +533,10 @@ async function dispatchSlashCommand(interaction) {
   const optionParts = [];
   let referenceMessageId = null;
   for (const option of interaction.options.data) {
-    if (option.name === 'message_id') referenceMessageId = String(option.value);
+    if (option.name === 'message_id') {
+      referenceMessageId = String(option.value);
+      if (command === 'reply') continue;
+    }
     if (option.type === 6) {
       const selected = interaction.options.getUser(option.name);
       if (selected) optionParts.push('<@' + selected.id + '>');
@@ -547,7 +550,7 @@ async function dispatchSlashCommand(interaction) {
       optionParts.push(String(option.value));
     }
   }
-  const body = optionParts.join(' ').trim();
+  const body = command === 'panelbutton' ? optionParts.join(' | ').trim() : optionParts.join(' ').trim();
   const content = prefix + command + (body ? ' ' + body : '');
   const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member) return interaction.editReply('❌ I could not load your server member record.');
