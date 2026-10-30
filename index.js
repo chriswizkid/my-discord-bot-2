@@ -461,28 +461,37 @@ async function dispatchSlashCommand(interaction) {
   const content=prefix+command+(body?' '+body:'');
   const member=await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
   if(!member)return interaction.editReply('❌ I could not load your server member record.');
-  const mentionsUsers=user?[user]:[];
+  const mentionUserIds=[...(user?[user.id]:[]),...([...content.matchAll(/<@!?(\d{15,25})>/g)].map(m=>m[1]))];
+  const mentionRoleIds=[...(role?[role.id]:[]),...([...content.matchAll(/<@&(\d{15,25})>/g)].map(m=>m[1]))];
+  const mentionChannelIds=[...(channel?[channel.id]:[]),...([...content.matchAll(/<#(\d{15,25})>/g)].map(m=>m[1]))];
+  const unique=values=>[...new Set(values)];
+  const mentionsUsers=unique(mentionUserIds).map(id=>id===user?.id?user:interaction.client.users.cache.get(id)).filter(Boolean);
   const mentionsMembers=[];
-  if(user){const m=await interaction.guild.members.fetch(user.id).catch(()=>null);if(m)mentionsMembers.push(m);}
-  const mentionRoles=role?[role]:[];
-  const mentionChannels=channel?[channel]:[];
-  const makeCollection=items=>({first:()=>items[0]||null,values:()=>items.values(),[Symbol.iterator]:()=>items[Symbol.iterator]()});
+  for(const id of unique(mentionUserIds)){const m=await interaction.guild.members.fetch(id).catch(()=>null);if(m)mentionsMembers.push(m);}
+  const mentionsRoles=unique(mentionRoleIds).map(id=>interaction.guild.roles.cache.get(id)).filter(Boolean);
+  const mentionsChannels=unique(mentionChannelIds).map(id=>interaction.guild.channels.cache.get(id)).filter(Boolean);
+  const makeCollection=items=>({first:()=>items[0]||null,at:i=>items[i]||null,values:()=>items.values(),[Symbol.iterator]:()=>items[Symbol.iterator]()});
+  let initialResponseUsed=false;
+  const sendResponse=(...sendArgs)=>{
+    if(!initialResponseUsed){initialResponseUsed=true;return interaction.editReply(...sendArgs);}
+    return interaction.followUp(...sendArgs);
+  };
   const channelProxy=new Proxy(interaction.channel,{
-    get(target,prop){if(prop==='send')return(...sendArgs)=>interaction.followUp(...sendArgs);const value=Reflect.get(target,prop,target);return typeof value==='function'?value.bind(target):value;}
+    get(target,prop){if(prop==='send')return(...sendArgs)=>sendResponse(...sendArgs);const value=Reflect.get(target,prop,target);return typeof value==='function'?value.bind(target):value;}
   });
   const fakeMessage={
     id:'slash-'+interaction.id,content,author:interaction.user,member,guild:interaction.guild,channel:channelProxy,
     attachments:[],reference:messageId?{messageId}:null,
     mentions:{
       users:makeCollection(mentionsUsers),members:makeCollection(mentionsMembers),
-      roles:makeCollection(mentionRoles),channels:makeCollection(mentionChannels),
+      roles:makeCollection(mentionsRoles),channels:makeCollection(mentionsChannels),
       values:()=>mentionsUsers.values()
     },
     delete:async()=>{},react:async()=>({}),
-    reply:(...replyArgs)=>interaction.followUp(...replyArgs)
+    reply:(...replyArgs)=>sendResponse(...replyArgs)
   };
   await handleCommandMessage(fakeMessage);
-  if(interaction.deferred&&!interaction.replied)await interaction.editReply('✅ Done.').catch(()=>{});
+  if(!initialResponseUsed)await interaction.editReply('✅ Done.').catch(()=>{});
 }
 
 async function recoverTicketPanels() {
