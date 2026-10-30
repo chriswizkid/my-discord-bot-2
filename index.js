@@ -501,7 +501,10 @@ async function dispatchSlashCommand(interaction) {
   const unique=values=>[...new Set(values)];
   const mentionsUsers=unique(mentionUserIds).map(id=>id===user?.id?user:interaction.client.users.cache.get(id)).filter(Boolean);
   const mentionsMembers=[];
-  for(const id of unique(mentionUserIds)){const m=await interaction.guild.members.fetch(id).catch(()=>null);if(m)mentionsMembers.push(m);}
+  for(const id of unique(mentionUserIds)){
+    const m=await interaction.guild.members.fetch(id).catch(()=>null);
+    if(m){mentionsMembers.push(m);if(!mentionsUsers.some(u=>u.id===m.user.id))mentionsUsers.push(m.user);}
+  }
   const mentionsRoles=unique(mentionRoleIds).map(id=>interaction.guild.roles.cache.get(id)).filter(Boolean);
   const mentionsChannels=unique(mentionChannelIds).map(id=>interaction.guild.channels.cache.get(id)).filter(Boolean);
   const makeCollection=items=>({first:()=>items[0]||null,at:i=>items[i]||null,values:()=>items.values(),[Symbol.iterator]:()=>items[Symbol.iterator]()});
@@ -668,7 +671,7 @@ client.once('ready', async () => {
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
   await client.application.commands.set(slashCommands).catch(err => console.error('Slash command registration failed:',err));
-  client.user.setPresence({ activities: [{ name: 'With Chriswizkid' }], status: 'online' });
+  client.user.setPresence({ activities: [{ name: '.. With Chriswizkid' }], status: 'online' });
 });
 
 // React to every message from a member currently holding the Blehhh role.
