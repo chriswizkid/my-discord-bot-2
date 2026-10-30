@@ -492,36 +492,55 @@ function buildCommandsPayload(prefix, requestedPage = 0) {
   return { embeds: [embed], components: [row] };
 }
 
+const S = (name, description, required = false, extra = {}) => ({type:3,name,description,required,...extra});
+const U = (name, description, required = true) => ({type:6,name,description,required});
+const R = (name, description, required = true) => ({type:8,name,description,required});
+const C = (name, description, required = true) => ({type:7,name,description,required,channel_types:[0,5]});
+const N = (name, description, required = true, min_value = 1, max_value = 100) => ({type:4,name,description,required,min_value,max_value});
+const A = S('action','Action to perform',true,{choices:[{name:'Add',value:'add'},{name:'Give',value:'give'},{name:'Remove',value:'remove'}]});
 const slashCommandSpecs = [
-  ['warn','Warn a member.'],['unwarn','Remove a warning from a member.'],['warnings','View a member’s warnings.'],
-  ['mute','Timeout a member.'],['unmute','Remove a member timeout.'],['afk','Set your AFK status.'],
-  ['nick','Change a member nickname.'],['clearnick','Clear a member nickname.'],['serverinfo','View server information.'],
-  ['roleinfo','View role information.'],['checkuser','View a member profile.'],['modcheck','View staff moderation statistics.'],
-  ['embed','Create a custom-colour embed.'],['panelbutton','Add a button to a bot panel.'],['webhook','Open the interactive webhook builder.'],['role','Add or remove a role.'],
-  ['prefix','Change the server prefix.'],['slowmode','Set channel slowmode.'],['lock','Lock this channel.'],['unlock','Unlock this channel.'],
-  ['purge','Delete recent channel messages.'],['snipe','Show a deleted message by its position.'],['s','Alias for snipe.'],
-  ['cs','Clear deleted-message history.'],['es','Show the latest edited message.'],['ces','Clear edited-message history.'],
-  ['ticket','Start ticket panel setup.'],['multipleticket','Start multi-ticket panel setup.'],['closeticket','Close the current ticket.'],
-  ['say','Send a message as the bot.'],['reply','Reply to a selected message ID as the bot.'],['kick','Kick a member.'],['ban','Ban a member.'],
-  ['unban','Unban a member by ID.'],['report','Report a member.'],['setupreportlog','Set the report log channel.'],
-  ['hug','Hug a member.'],['kiss','Kiss a member.'],['slap','Slap a member.'],['ship','Ship two members.'],
-  ['whisper','Send a private message to a member.'],['blehhh','Give a temporary Blehhh role.'],['unblehhh','Remove the Blehhh role.'],
-  ['help','Get help for a command.'],['setupaudit','Set the audit log channel.'],['commands','Show all bot commands.'],['67','Give a member the 67 effect.']
+['warn','Warn a member.',[U('member','Member to warn'),S('reason','Reason')]],
+['unwarn','Remove a warning.',[U('member','Member'),S('number','Warning number or all')]],
+['warnings','View member warnings.',[U('member','Member')]],
+['mute','Timeout a member.',[U('member','Member'),S('duration','Duration, e.g. 10m or 1h',true),S('reason','Reason')]],
+['unmute','Remove a timeout.',[U('member','Member')]],
+['afk','Set your AFK status.',[S('reason','Optional AFK message')]],
+['nick','Change a nickname.',[U('member','Member'),S('nickname','New nickname',true)]],
+['clearnick','Clear a nickname.',[U('member','Member')]],
+['serverinfo','View server information.',[]],
+['roleinfo','View role information.',[R('role','Role')]],
+['checkuser','View a member profile.',[U('member','Member')]],
+['modcheck','View staff moderation stats.',[U('staff','Staff member')]],
+['embed','Create a custom embed.',[S('color','Hex colour, e.g. #5865F2',true),S('message','Embed text',true)]],
+['panelbutton','Add a button to a panel.',[S('message_id','Panel message ID',true),S('label','Button label',true),S('destination','Channel ID or HTTPS URL',true)]],
+['webhook','Open Webhook Studio.',[]],
+['role','Add or remove a role.',[A,U('member','Member'),R('role','Role')]],
+['prefix','Change server prefix.',[S('prefix','New prefix',true)]],
+['slowmode','Set channel slowmode.',[S('duration','Duration or off',true)]],
+['lock','Lock this channel.',[]],['unlock','Unlock this channel.',[]],
+['purge','Delete recent messages.',[N('amount','Number of messages',true,1,100)]],
+['snipe','Show a deleted message.',[N('number','Position; 1 is newest',false,1,100)]],
+['s','Show a deleted message.',[N('number','Position; 1 is newest',false,1,100)]],
+['cs','Clear deleted-message history.',[]],['es','Show latest edited message.',[]],['ces','Clear edited-message history.',[]],
+['ticket','Start ticket panel setup.',[]],['multipleticket','Start multi-ticket panel setup.',[]],['closeticket','Close this ticket.',[]],
+['say','Send a message as the bot.',[S('message','Message content',true)]],
+['reply','Reply to a message ID.',[S('message_id','Message ID',true),S('message','Reply content',true)]],
+['kick','Kick a member.',[U('member','Member'),S('reason','Reason')]],
+['ban','Ban a member.',[U('member','Member'),S('reason','Reason')]],
+['unban','Unban a user by ID.',[S('user_id','User ID',true)]],
+['report','Report a member.',[U('member','Member'),S('reason','Reason',true)]],
+['setupreportlog','Set report log channel.',[C('channel','Log channel')]],
+['hug','Hug a member.',[U('member','Member')]],['kiss','Kiss a member.',[U('member','Member')]],['slap','Slap a member.',[U('member','Member')]],
+['ship','Ship two members.',[U('first','First member'),U('second','Second member')]],
+['whisper','DM a member.',[U('member','Member'),S('message','Message',true)]],
+['blehhh','Give temporary Blehhh role.',[U('member','Member'),S('duration','Duration',true)]],
+['unblehhh','Remove Blehhh role.',[U('member','Member')]],
+['help','Get help for a command.',[S('command','Command name',true)]],
+['setupaudit','Set audit log channel.',[C('channel','Audit channel')]],
+['commands','Show all bot commands.',[]],
+['67','Give the 67 effect.',[S('action','Action',true,{choices:[{name:'Give',value:'give'}]}),U('member','Member')]]
 ];
-const slashCommands = slashCommandSpecs.map(([name,description]) => ({
-  name, description,
-  options: [
-    {type:3,name:'args',description:'Extra command arguments (e.g. give, add, or a message ID)',required:false},
-    {type:6,name:'user',description:'Target member',required:false},
-    {type:8,name:'role',description:'Target role',required:false},
-    {type:7,name:'channel',description:'Target text channel',required:false},
-    {type:4,name:'amount',description:'Amount or history position',required:false,min_value:1,max_value:100},
-    {type:3,name:'duration',description:'Duration, e.g. 10m or 1h',required:false},
-    {type:3,name:'reason',description:'Reason or explanation',required:false},
-    {type:3,name:'text',description:'Text, nickname, or message content',required:false},
-    {type:3,name:'message_id',description:'Message ID to reply to',required:false}
-  ]
-}));
+const slashCommands = slashCommandSpecs.map(([name,description,options]) => ({name,description,options}));
 
 async function dispatchSlashCommand(interaction) {
   await interaction.deferReply();
@@ -754,7 +773,7 @@ client.once('ready', async () => {
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
   await restoreWebhookSchedules().catch(err => console.error('Webhook schedule recovery error:',err));
-  await client.application.commands.set(slashCommands).catch(err => console.error('Slash command registration failed:',err));
+  const registeredSlashCommands = await client.application.commands.set(slashCommands); console.log(`Registered ${registeredSlashCommands.size} global slash commands.`);
   client.user.setPresence({ activities: [{ name: '.. With Chriswizkid' }], status: 'online' });
 });
 
