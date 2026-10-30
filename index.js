@@ -507,6 +507,34 @@ const slashCommands = slashCommandSpecs.map(([name,description]) => ({
 async function dispatchSlashCommand(interaction) {
   await interaction.deferReply();
   const command=interaction.commandName;
+
+  // Render /commands directly as an interaction response instead of routing it
+  // through the prefix-command message adapter.
+  if (command === 'commands') {
+    const prefix = getPrefix(interaction.guildId);
+    const pages = [
+      ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
+      ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
+      ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply','webhook']],
+      ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','67','help']]
+    ];
+    const [title, keys] = pages[0];
+    const lines = keys.map(k => {
+      const found = commandList(prefix).find(([name]) => name.includes(k));
+      return found ? `**${found[0]}** — ${found[1]}` : `**${prefix}${k}**`;
+    });
+    const embed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle(title)
+      .setDescription(lines.join('\\n'))
+      .setFooter({ text: `Page 1/${pages.length} • Prefix: ${prefix}` });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('commands:prev:0').setEmoji('◀️').setLabel('Back').setStyle(ButtonStyle.Secondary).setDisabled(true),
+      new ButtonBuilder().setCustomId('commands:home:0').setEmoji('🏠').setLabel('Home').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('commands:next:0').setEmoji('▶️').setLabel('Next').setStyle(ButtonStyle.Secondary)
+    );
+    return interaction.editReply({ embeds: [embed], components: [row] });
+  }
   const args=interaction.options.getString('args')||'';
   const user=interaction.options.getUser('user');
   const role=interaction.options.getRole('role');
