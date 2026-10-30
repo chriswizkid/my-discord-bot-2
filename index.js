@@ -1920,7 +1920,7 @@ client.on('interactionCreate', async (interaction) => {
       modal.addComponents(
         new ActionRowBuilder().addComponents(field('webhook:content','Message content','Replacement text (optional)',TextInputStyle.Paragraph,false,2000)),
         new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Replacement title (optional)',TextInputStyle.Short,false,256)),
-        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Replacement description (optional)',TextInputStyle.Paragraph,false,1500)),
+        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Replacement description (optional)',TextInputStyle.Paragraph,false,4000)),
         new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7)),
         new ActionRowBuilder().addComponents(field('webhook:image','Embed image URL','https://... (optional)',TextInputStyle.Short,false,400))
       );
@@ -1936,7 +1936,7 @@ client.on('interactionCreate', async (interaction) => {
       modal.addComponents(
         new ActionRowBuilder().addComponents(field('webhook:content','Message content','Text and mentions (optional)',TextInputStyle.Paragraph,false,2000)),
         new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Title (optional)',TextInputStyle.Short,false,256)),
-        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Description (optional)',TextInputStyle.Paragraph,false,3000)),
+        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Description (optional)',TextInputStyle.Paragraph,false,4000)),
         new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7)),
         new ActionRowBuilder().addComponents(field('webhook:image','Embed image URL','https://... (optional)',TextInputStyle.Short,false,400))
       );
@@ -2019,7 +2019,7 @@ client.on('interactionCreate', async (interaction) => {
         new ActionRowBuilder().addComponents(field('webhook:runat','Date and time with timezone','2026-11-01T18:30+05:30',TextInputStyle.Short,true,40)),
         new ActionRowBuilder().addComponents(field('webhook:content','Message content','Announcement text (optional)',TextInputStyle.Paragraph,false,1500)),
         new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Optional title',TextInputStyle.Short,false,256)),
-        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Optional description',TextInputStyle.Paragraph,false,1500)),
+        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Optional description',TextInputStyle.Paragraph,false,4000)),
         new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7))
       );
       return interaction.showModal(modal);
