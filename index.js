@@ -61,6 +61,7 @@ const defaultData = {
   active67: {},
   emergencyCleanup: {},
   webhooks: {},
+  webhookSchedules: [],
 };
 let data = loadData();
 function loadData() {
@@ -175,6 +176,7 @@ const tempMuteTimers = new Map();
 const blehhhCooldowns = new Map();
 const blehhhTimers = new Map();
 const active67Timers = new Map();
+const webhookScheduleTimers = new Map();
 const reportCooldowns = new Map();
 const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
 const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
@@ -273,6 +275,36 @@ function schedule67Effect(guild,userId,expiresAt){
   const effectKey=key(guild.id,userId),old=active67Timers.get(effectKey);if(old)clearTimeout(old);
   active67Timers.set(effectKey,setTimeout(()=>end67Effect(guild,userId).catch(e=>console.error('67 expiry error:',e)),Math.max(0,expiresAt-Date.now())));
 }
+function scheduleWebhookJob(job){
+  const old=webhookScheduleTimers.get(job.id);if(old)clearTimeout(old);
+  const delay=Math.max(0,job.runAt-Date.now());
+  const timer=setTimeout(async()=>{
+    const remaining=job.runAt-Date.now();
+    if(remaining>0){scheduleWebhookJob(job);return;}
+    const record=data.webhooks?.[job.guildId]?.[job.webhookId];
+    try{
+      if(!record)throw new Error('Saved webhook no longer exists.');
+      const embed=new EmbedBuilder().setColor(Number.parseInt(job.color||'5865F2',16));
+      if(job.title)embed.setTitle(job.title);
+      if(job.description)embed.setDescription(job.description);
+      const hook=new WebhookClient({id:record.id,token:record.token});
+      const sent=await hook.send({content:job.content||undefined,embeds:[job.title||job.description?embed:null].filter(Boolean),allowedMentions:{parse:[]}});
+      record.lastMessageId=sent.id;
+      record.lastMessageChannelId=record.channelId;
+    }catch(error){console.error('Scheduled webhook send failed:',error);}
+    data.webhookSchedules=(data.webhookSchedules||[]).filter(item=>item.id!==job.id);
+    webhookScheduleTimers.delete(job.id);saveData();
+  },Math.min(delay,2147480000));
+  webhookScheduleTimers.set(job.id,timer);
+}
+async function restoreWebhookSchedules(){
+  for(const job of data.webhookSchedules||[]){
+    if(job.runAt<=Date.now()){
+      scheduleWebhookJob(job);
+    }else scheduleWebhookJob(job);
+  }
+}
+
 async function restore67Effects(){
   for(const [effectKey,saved] of Object.entries(data.active67||{})){
     const [guildId,userId]=effectKey.split(':'),guild=client.guilds.cache.get(guildId);if(!guild)continue;
@@ -670,6 +702,7 @@ client.once('ready', async () => {
   await initializeMongoDB();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
+  await restoreWebhookSchedules().catch(err => console.error('Webhook schedule recovery error:',err));
   await client.application.commands.set(slashCommands).catch(err => console.error('Slash command registration failed:',err));
   client.user.setPresence({ activities: [{ name: '.. With Chriswizkid' }], status: 'online' });
 });
@@ -1311,7 +1344,8 @@ async function handleCommandMessage(message) {
       if(!hasPerm(message.member,PermissionsBitField.Flags.ManageWebhooks))return sendTemp(message.channel,'❌ You need **Manage Webhooks** permission.',5000);
       const row=new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('webhook:create').setLabel('Create Webhook').setEmoji('➕').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('webhook:list').setLabel('Manage Webhooks').setEmoji('⚙️').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('webhook:list').setLabel('Manage Webhooks').setEmoji('⚙️').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('webhook:schedules').setLabel('Scheduled').setEmoji('🗓️').setStyle(ButtonStyle.Secondary)
       );
       return message.channel.send({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('3C Bot • Webhook Studio').setDescription('Create a webhook, compose branded messages with embeds, add link buttons, and manage webhooks created by 3C Bot.')],components:[row]});
     }
@@ -1802,6 +1836,7 @@ client.on('interactionCreate', async (interaction) => {
         const row=new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`webhook:compose:${webhook.id}`).setLabel('Compose Message').setEmoji('✍️').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId(`webhook:buttons:${webhook.id}`).setLabel('Add Link Buttons').setEmoji('🔗').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`webhook:schedule:${webhook.id}`).setLabel('Schedule').setEmoji('🗓️').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`webhook:delete:${webhook.id}`).setLabel('Delete Webhook').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
         );
         return interaction.reply({content:`✅ Webhook **${name}** created in <#${channelId}>. Use the controls below to compose messages or manage it.`,components:[row],ephemeral:true});
@@ -1823,6 +1858,7 @@ client.on('interactionCreate', async (interaction) => {
       const row=new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`webhook:compose:${id}`).setLabel('Compose / Resend').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`webhook:buttons:${id}`).setLabel('Add Link Buttons').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`webhook:schedule:${id}`).setLabel('Schedule').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`webhook:delete:${id}`).setLabel('Delete').setStyle(ButtonStyle.Danger)
       );
       return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}`,components:[row]});
@@ -1905,6 +1941,67 @@ client.on('interactionCreate', async (interaction) => {
         await hook.editMessage(messageId,{components:[row]});
         return interaction.reply({content:'✅ Link buttons added to the webhook message.',ephemeral:true});
       }catch(error){console.error('Webhook button update error:',error);return interaction.reply({content:'❌ I could not update that webhook message. Check the message ID and webhook.',ephemeral:true});}
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:schedule:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`webhook:schedule:modal:${id}`).setTitle('Schedule Webhook Announcement');
+      const field=(fieldId,label,placeholder,style=TextInputStyle.Short,required=false,max=1000)=>new TextInputBuilder().setCustomId(fieldId).setLabel(label).setPlaceholder(placeholder).setStyle(style).setRequired(required).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(field('webhook:runat','Date and time with timezone','2026-11-01T18:30+05:30',TextInputStyle.Short,true,40)),
+        new ActionRowBuilder().addComponents(field('webhook:content','Message content','Announcement text (optional)',TextInputStyle.Paragraph,false,1500)),
+        new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Optional title',TextInputStyle.Short,false,256)),
+        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Optional description',TextInputStyle.Paragraph,false,1500)),
+        new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if(interaction.isModalSubmit()&&interaction.customId.startsWith('webhook:schedule:modal:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[3],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const dateText=interaction.fields.getTextInputValue('webhook:runat').trim();
+      if(!/(Z|[+-]\\d{2}:\\d{2})$/i.test(dateText))return interaction.reply({content:'❌ Include a timezone, e.g. 2026-11-01T18:30+05:30.',ephemeral:true});
+      const runAt=Date.parse(dateText);
+      if(!Number.isFinite(runAt)||runAt<=Date.now())return interaction.reply({content:'❌ Enter a valid future date and time.',ephemeral:true});
+      const content=interaction.fields.getTextInputValue('webhook:content').trim();
+      const title=interaction.fields.getTextInputValue('webhook:title').trim();
+      const description=interaction.fields.getTextInputValue('webhook:description').trim();
+      const color=(interaction.fields.getTextInputValue('webhook:color').trim()||'#5865F2').replace(/^#/,'');
+      if(!/^[0-9a-fA-F]{6}$/.test(color))return interaction.reply({content:'❌ Embed colour must be a six-digit hex value.',ephemeral:true});
+      if(!content&&!title&&!description)return interaction.reply({content:'❌ Add message content or an embed title/description.',ephemeral:true});
+      const job={id:`wh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`,guildId:interaction.guildId,webhookId:id,runAt,content,title,description,color,createdBy:interaction.user.id};
+      if(!Array.isArray(data.webhookSchedules))data.webhookSchedules=[];
+      data.webhookSchedules.push(job);saveData();scheduleWebhookJob(job);
+      return interaction.reply({content:`🗓️ Scheduled for <t:${Math.floor(runAt/1000)}:F> (<t:${Math.floor(runAt/1000)}:R>) in <#${record.channelId}>.`,ephemeral:true});
+    }
+
+    if(interaction.isButton()&&interaction.customId==='webhook:schedules'){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const jobs=(data.webhookSchedules||[]).filter(job=>job.guildId===interaction.guildId).sort((a,b)=>a.runAt-b.runAt);
+      if(!jobs.length)return interaction.reply({content:'There are no scheduled webhook announcements.',ephemeral:true});
+      const menu=new StringSelectMenuBuilder().setCustomId('webhook:schedule:select').setPlaceholder('Choose a scheduled announcement to cancel').addOptions(jobs.slice(0,25).map(job=>({label:new Date(job.runAt).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC',description:(job.title||job.content||'Webhook announcement').slice(0,100),value:job.id})));
+      return interaction.reply({content:'Scheduled webhook announcements (times shown in UTC):',components:[new ActionRowBuilder().addComponents(menu)],ephemeral:true});
+    }
+
+    if(interaction.isStringSelectMenu()&&interaction.customId==='webhook:schedule:select'){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const job=(data.webhookSchedules||[]).find(item=>item.id===interaction.values[0]&&item.guildId===interaction.guildId);
+      if(!job)return interaction.reply({content:'❌ That scheduled announcement no longer exists.',ephemeral:true});
+      const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`webhook:schedulecancel:${job.id}`).setLabel('Cancel Scheduled Announcement').setStyle(ButtonStyle.Danger));
+      return interaction.reply({content:`Cancel scheduled announcement for <t:${Math.floor(job.runAt/1000)}:F>?`,components:[row],ephemeral:true});
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:schedulecancel:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],job=(data.webhookSchedules||[]).find(item=>item.id===id&&item.guildId===interaction.guildId);
+      if(!job)return interaction.reply({content:'❌ Scheduled announcement not found.',ephemeral:true});
+      const timer=webhookScheduleTimers.get(id);if(timer)clearTimeout(timer);webhookScheduleTimers.delete(id);
+      data.webhookSchedules=data.webhookSchedules.filter(item=>item.id!==id);saveData();
+      return interaction.update({content:'✅ Scheduled announcement cancelled.',components:[]});
     }
 
     if(interaction.isButton()&&interaction.customId.startsWith('webhook:delete:')){
