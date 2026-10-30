@@ -1835,6 +1835,7 @@ client.on('interactionCreate', async (interaction) => {
         saveData();
         const row=new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`webhook:compose:${webhook.id}`).setLabel('Compose Message').setEmoji('✍️').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`webhook:update:${webhook.id}`).setLabel('Update Last').setEmoji('♻️').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`webhook:buttons:${webhook.id}`).setLabel('Add Link Buttons').setEmoji('🔗').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`webhook:schedule:${webhook.id}`).setLabel('Schedule').setEmoji('🗓️').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`webhook:delete:${webhook.id}`).setLabel('Delete Webhook').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
@@ -1857,11 +1858,28 @@ client.on('interactionCreate', async (interaction) => {
       if(!record)return interaction.reply({content:'❌ That saved webhook no longer exists.',ephemeral:true});
       const row=new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`webhook:compose:${id}`).setLabel('Compose / Resend').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`webhook:update:${id}`).setLabel('Update Last').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`webhook:buttons:${id}`).setLabel('Add Link Buttons').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`webhook:schedule:${id}`).setLabel('Schedule').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`webhook:delete:${id}`).setLabel('Delete').setStyle(ButtonStyle.Danger)
       );
       return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}`,components:[row]});
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:update:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
+      if(!record||!record.lastMessageId)return interaction.reply({content:'❌ This webhook has no saved last message to update yet. Compose and send one first.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`webhook:update:modal:${id}`).setTitle('Update Last Webhook Message');
+      const field=(fieldId,label,placeholder,style=TextInputStyle.Short,required=false,max=3000)=>new TextInputBuilder().setCustomId(fieldId).setLabel(label).setPlaceholder(placeholder).setStyle(style).setRequired(required).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(field('webhook:content','Message content','Replacement text (optional)',TextInputStyle.Paragraph,false,2000)),
+        new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Replacement title (optional)',TextInputStyle.Short,false,256)),
+        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Replacement description (optional)',TextInputStyle.Paragraph,false,1500)),
+        new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7)),
+        new ActionRowBuilder().addComponents(field('webhook:image','Embed image URL','https://... (optional)',TextInputStyle.Short,false,400))
+      );
+      return interaction.showModal(modal);
     }
 
     if(interaction.isButton()&&interaction.customId.startsWith('webhook:compose:')){
@@ -1880,10 +1898,12 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.showModal(modal);
     }
 
-    if(interaction.isModalSubmit()&&interaction.customId.startsWith('webhook:compose:modal:')){
+    if(interaction.isModalSubmit()&&(interaction.customId.startsWith('webhook:compose:modal:')||interaction.customId.startsWith('webhook:update:modal:'))){
       if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const isUpdate=interaction.customId.startsWith('webhook:update:modal:');
       const id=interaction.customId.split(':')[3],record=findSavedWebhook(id);
       if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      if(isUpdate&&!record.lastMessageId)return interaction.reply({content:'❌ There is no last message to update.',ephemeral:true});
       const content=interaction.fields.getTextInputValue('webhook:content').trim();
       const title=interaction.fields.getTextInputValue('webhook:title').trim();
       const description=interaction.fields.getTextInputValue('webhook:description').trim();
@@ -1899,9 +1919,10 @@ client.on('interactionCreate', async (interaction) => {
       if(imageUrl)embed.setImage(imageUrl);
       try{
         const hook=new WebhookClient({id:record.id,token:record.token});
-        const sent=await hook.send({content:content||undefined,embeds:[title||description||imageUrl?embed:null].filter(Boolean),allowedMentions:{parse:[]}});
+        const payload={content:content||undefined,embeds:[title||description||imageUrl?embed:null].filter(Boolean),allowedMentions:{parse:[]}};
+        const sent=isUpdate?await hook.editMessage(record.lastMessageId,payload):await hook.send(payload);
         record.lastMessageId=sent.id;record.lastMessageChannelId=record.channelId;saveData();
-        return interaction.reply({content:`✅ Webhook message sent to <#${record.channelId}>. Message ID: \`${sent.id}\`\nUse **Add Link Buttons** to attach URL buttons.`,ephemeral:true});
+        return interaction.reply({content:isUpdate?`♻️ Updated the last webhook message in <#${record.channelId}>.`:`✅ Webhook message sent to <#${record.channelId}>. Message ID: \`${sent.id}\`\nUse **Add Link Buttons** to attach URL buttons.`,ephemeral:true});
       }catch(error){console.error('Webhook send error:',error);return interaction.reply({content:'❌ I could not send that webhook message. The webhook may have been deleted or its token is no longer valid.',ephemeral:true});}
     }
 
