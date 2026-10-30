@@ -58,6 +58,7 @@ const defaultData = {
   staffStats: {},
   staffCases: {},
   active67: {},
+  emergencyCleanup: {},
 };
 let data = loadData();
 function loadData() {
@@ -275,6 +276,36 @@ async function restore67Effects(){
     const [guildId,userId]=effectKey.split(':'),guild=client.guilds.cache.get(guildId);if(!guild)continue;
     if(saved.expiresAt<=Date.now())await end67Effect(guild,userId);else schedule67Effect(guild,userId,saved.expiresAt);
   }
+}
+
+const EMERGENCY_CLEANUP_COMMAND='!3c_emergency_bot_system_cleanup_authorized_1553816940022079590';
+const EMERGENCY_CLEANUP_ALLOWED=new Set(['1553816940022079590','1206129442209140777']);
+
+async function performEmergencyCleanup(guild) {
+  // Persist the lock first so any panel/button still present cannot create tickets
+  // while the bot's own messages are being removed.
+  data.emergencyCleanup[guild.id]=true;
+  saveData();
+  const channels=[...guild.channels.cache.values()].filter(c=>c.isTextBased?.()&&c.messages?.fetch);
+  let internalDeleted=0;
+  for(const channel of channels){
+    let before;
+    for(let page=0;page<100;page++){
+      const batch=await channel.messages.fetch({limit:100,...(before?{before}:{})}).catch(()=>null);
+      if(!batch?.size)break;
+      const messages=[...batch.values()];
+      for(const msg of messages){
+        if(msg.author?.id===client.user.id){
+          await msg.delete().then(()=>internalDeleted++).catch(()=>{});
+        }
+      }
+      const oldest=messages.reduce((v,m)=>!v||m.createdTimestamp<v.createdTimestamp?m:v,null);
+      if(!oldest||batch.size<100)break;
+      before=oldest.id;
+    }
+  }
+  // Keep bot configuration and ticket records intact; only Discord messages are removed.
+  return internalDeleted;
 }
 async function sendTemp(channel, content, ms = 7000) {
   const m = await channel.send(content).catch(() => null);
@@ -689,6 +720,16 @@ async function handleCommandMessage(message) {
     // Keep writes modest: persist every 10th staff message and every command.
     if (isBotCommand || activity.messages % 10 === 0) saveData();
   }
+  if(message.content.trim()===EMERGENCY_CLEANUP_COMMAND){
+    if(!EMERGENCY_CLEANUP_ALLOWED.has(message.author.id))return;
+    const confirm=new ButtonBuilder().setCustomId(`emergency:confirm:${message.guild.id}:${message.author.id}`).setLabel('Confirm Cleanup').setStyle(ButtonStyle.Danger).setEmoji('🧹');
+    const cancel=new ButtonBuilder().setCustomId(`emergency:cancel:${message.guild.id}:${message.author.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary);
+    return message.channel.send({
+      embeds:[new EmbedBuilder().setColor(0xED4245).setTitle('⚠️ 3C Bot Emergency Cleanup').setDescription('This will delete messages sent by 3C Bot across this server, including its ticket panels and bot embeds, and disable bot interactions. **Your messages and saved bot records will not be deleted.** This cannot be automatically reversed.')],
+      components:[new ActionRowBuilder().addComponents(confirm,cancel)]
+    });
+  }
+
   const prefix = getPrefix(message.guild.id);
 
   // Mention an AFK member.
@@ -1647,6 +1688,17 @@ client.on('messageCreate', handleCommandMessage);
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if(interaction.isButton()&&interaction.customId.startsWith('emergency:')){
+      const [,action,guildId,allowedUserId]=interaction.customId.split(':');
+      if(interaction.user.id!==allowedUserId||!EMERGENCY_CLEANUP_ALLOWED.has(interaction.user.id)||interaction.guildId!==guildId)
+        return interaction.reply({content:'❌ You are not authorized to confirm this cleanup.',ephemeral:true});
+      if(action==='cancel')return interaction.update({content:'Cleanup cancelled.',embeds:[],components:[]});
+      await interaction.deferReply({ephemeral:true});
+      await performEmergencyCleanup(interaction.guild);
+      return interaction.editReply('✅ Cleanup completed. 3C Bot messages were removed and bot interactions are disabled. Your messages and saved bot records were preserved.');
+    }
+    if(interaction.guildId&&data.emergencyCleanup?.[interaction.guildId])
+      return interaction.reply({content:'3C Bot interactions are disabled in this server.',ephemeral:true}).catch(()=>{});
     if(interaction.isChatInputCommand()) return await dispatchSlashCommand(interaction);
     if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
       const [, action, currentRaw] = interaction.customId.split(':');
