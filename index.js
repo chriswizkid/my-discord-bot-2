@@ -407,6 +407,84 @@ function commandList(prefix) {
   ];
 }
 
+const slashCommandSpecs = [
+  ['warn','Warn a member.'],['unwarn','Remove a warning from a member.'],['warnings','View a member’s warnings.'],
+  ['mute','Timeout a member.'],['unmute','Remove a member timeout.'],['afk','Set your AFK status.'],
+  ['nick','Change a member nickname.'],['clearnick','Clear a member nickname.'],['serverinfo','View server information.'],
+  ['roleinfo','View role information.'],['checkuser','View a member profile.'],['modcheck','View staff moderation statistics.'],
+  ['embed','Create a custom-colour embed.'],['panelbutton','Add a button to a bot panel.'],['role','Add or remove a role.'],
+  ['prefix','Change the server prefix.'],['slowmode','Set channel slowmode.'],['lock','Lock this channel.'],['unlock','Unlock this channel.'],
+  ['purge','Delete recent channel messages.'],['snipe','Show a deleted message by its position.'],['s','Alias for snipe.'],
+  ['cs','Clear deleted-message history.'],['es','Show the latest edited message.'],['ces','Clear edited-message history.'],
+  ['ticket','Start ticket panel setup.'],['multipleticket','Start multi-ticket panel setup.'],['closeticket','Close the current ticket.'],
+  ['say','Send a message as the bot.'],['reply','Reply to a selected message ID as the bot.'],['kick','Kick a member.'],['ban','Ban a member.'],
+  ['unban','Unban a member by ID.'],['report','Report a member.'],['setupreportlog','Set the report log channel.'],
+  ['hug','Hug a member.'],['kiss','Kiss a member.'],['slap','Slap a member.'],['ship','Ship two members.'],
+  ['whisper','Send a private message to a member.'],['blehhh','Give a temporary Blehhh role.'],['unblehhh','Remove the Blehhh role.'],
+  ['help','Get help for a command.'],['setupaudit','Set the audit log channel.'],['commands','Show all bot commands.'],['67','Give a member the 67 effect.']
+];
+const slashCommands = slashCommandSpecs.map(([name,description]) => ({
+  name, description,
+  options: [
+    {type:3,name:'args',description:'Extra command arguments (e.g. give, add, or a message ID)',required:false},
+    {type:6,name:'user',description:'Target member',required:false},
+    {type:8,name:'role',description:'Target role',required:false},
+    {type:7,name:'channel',description:'Target text channel',required:false},
+    {type:4,name:'amount',description:'Amount or history position',required:false,min_value:1,max_value:100},
+    {type:3,name:'duration',description:'Duration, e.g. 10m or 1h',required:false},
+    {type:3,name:'reason',description:'Reason or explanation',required:false},
+    {type:3,name:'text',description:'Text, nickname, or message content',required:false},
+    {type:3,name:'message_id',description:'Message ID to reply to',required:false}
+  ]
+}));
+
+async function dispatchSlashCommand(interaction) {
+  await interaction.deferReply();
+  const command=interaction.commandName;
+  const args=interaction.options.getString('args')||'';
+  const user=interaction.options.getUser('user');
+  const role=interaction.options.getRole('role');
+  const channel=interaction.options.getChannel('channel');
+  const amount=interaction.options.getInteger('amount');
+  const duration=interaction.options.getString('duration');
+  const reason=interaction.options.getString('reason');
+  const text=interaction.options.getString('text');
+  const messageId=interaction.options.getString('message_id');
+  const mentionUser=user?'<@'+user.id+'>':'';
+  const mentionRole=role?'<@&'+role.id+'>':'';
+  const mentionChannel=channel?'<#'+channel.id+'>':'';
+  let pieces=[];
+  if(command==='67'||command==='role') pieces=[args,mentionUser,mentionRole,mentionChannel,amount,duration,reason,text].filter(v=>v!==null&&v!==undefined&&String(v).length);
+  else pieces=[mentionUser,mentionRole,mentionChannel,amount,duration,reason,text,args].filter(v=>v!==null&&v!==undefined&&String(v).length);
+  const body=pieces.join(' ').trim();
+  const prefix=getPrefix(interaction.guildId);
+  const content=prefix+command+(body?' '+body:'');
+  const member=await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
+  if(!member)return interaction.editReply('❌ I could not load your server member record.');
+  const mentionsUsers=user?[user]:[];
+  const mentionsMembers=[];
+  if(user){const m=await interaction.guild.members.fetch(user.id).catch(()=>null);if(m)mentionsMembers.push(m);}
+  const mentionRoles=role?[role]:[];
+  const mentionChannels=channel?[channel]:[];
+  const makeCollection=items=>({first:()=>items[0]||null,values:()=>items.values(),[Symbol.iterator]:()=>items[Symbol.iterator]()});
+  const channelProxy=new Proxy(interaction.channel,{
+    get(target,prop){if(prop==='send')return(...sendArgs)=>interaction.followUp(...sendArgs);const value=Reflect.get(target,prop,target);return typeof value==='function'?value.bind(target):value;}
+  });
+  const fakeMessage={
+    id:'slash-'+interaction.id,content,author:interaction.user,member,guild:interaction.guild,channel:channelProxy,
+    attachments:[],reference:messageId?{messageId}:null,
+    mentions:{
+      users:makeCollection(mentionsUsers),members:makeCollection(mentionsMembers),
+      roles:makeCollection(mentionRoles),channels:makeCollection(mentionChannels),
+      values:()=>mentionsUsers.values()
+    },
+    delete:async()=>{},react:async()=>({}),
+    reply:(...replyArgs)=>interaction.followUp(...replyArgs)
+  };
+  await handleCommandMessage(fakeMessage);
+  if(interaction.deferred&&!interaction.replied)await interaction.editReply('✅ Done.').catch(()=>{});
+}
+
 async function recoverTicketPanels() {
   // Persisted configs are preferred. This also validates their saved panel messages.
   for (const [id, config] of Object.entries(data.tickets || {})) {
@@ -546,6 +624,7 @@ client.once('ready', async () => {
   await initializeMongoDB();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
+  await client.application.commands.set(slashCommands).catch(err => console.error('Slash command registration failed:',err));
   client.user.setPresence({ activities: [{ name: 'With Chriswizkid' }], status: 'online' });
 });
 
@@ -580,7 +659,7 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
   });
 });
 
-client.on('messageCreate', async (message) => {
+async function handleCommandMessage(message) {
   if (!message.guild || message.author.bot) return;
   if (data.active67?.[key(message.guild.id,message.author.id)]) {
     const emoji=message.guild.emojis.cache.find(e=>e.name==='6777');
@@ -1554,16 +1633,18 @@ client.on('messageCreate', async (message) => {
     console.error(`[${message.guild?.name}] ${cmd}`, err);
     return sendTemp(message.channel, `❌ Something went wrong while running \`${cmd}\`. Check my permissions and role position.`, 7000);
   }
-});
+}
+client.on('messageCreate', handleCommandMessage);
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if(interaction.isChatInputCommand()) return await dispatchSlashCommand(interaction);
     if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
       const [, action, currentRaw] = interaction.customId.split(':');
       const current = Number(currentRaw) || 0;
       const pages = [
         ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
+        ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
         ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
         ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
       ];
