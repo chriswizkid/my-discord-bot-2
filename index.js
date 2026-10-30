@@ -525,66 +525,90 @@ const slashCommands = slashCommandSpecs.map(([name,description]) => ({
 
 async function dispatchSlashCommand(interaction) {
   await interaction.deferReply();
-  const command=interaction.commandName;
-
-  // Render the complete command registry with pagination.
+  const command = interaction.commandName;
   if (command === 'commands') {
     return interaction.editReply(buildCommandsPayload(getPrefix(interaction.guildId), 0));
   }
-  const args=interaction.options.getString('args')||'';
-  const user=interaction.options.getUser('user');
-  const role=interaction.options.getRole('role');
-  const channel=interaction.options.getChannel('channel');
-  const amount=interaction.options.getInteger('amount');
-  const duration=interaction.options.getString('duration');
-  const reason=interaction.options.getString('reason');
-  const text=interaction.options.getString('text');
-  const messageId=interaction.options.getString('message_id');
-  const mentionUser=user?'<@'+user.id+'>':'';
-  const mentionRole=role?'<@&'+role.id+'>':'';
-  const mentionChannel=channel?'<#'+channel.id+'>':'';
-  let pieces=[];
-  if(command==='67'||command==='role') pieces=[args,mentionUser,mentionRole,mentionChannel,amount,duration,reason,text].filter(v=>v!==null&&v!==undefined&&String(v).length);
-  else pieces=[mentionUser,mentionRole,mentionChannel,amount,duration,reason,text,args].filter(v=>v!==null&&v!==undefined&&String(v).length);
-  const body=pieces.join(' ').trim();
-  const prefix=getPrefix(interaction.guildId);
-  const content=prefix+command+(body?' '+body:'');
-  const member=await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
-  if(!member)return interaction.editReply('❌ I could not load your server member record.');
-  const mentionUserIds=[...(user?[user.id]:[]),...([...content.matchAll(/<@!?(\d{15,25})>/g)].map(m=>m[1]))];
-  const mentionRoleIds=[...(role?[role.id]:[]),...([...content.matchAll(/<@&(\d{15,25})>/g)].map(m=>m[1]))];
-  const mentionChannelIds=[...(channel?[channel.id]:[]),...([...content.matchAll(/<#(\d{15,25})>/g)].map(m=>m[1]))];
-  const unique=values=>[...new Set(values)];
-  const mentionsUsers=unique(mentionUserIds).map(id=>id===user?.id?user:interaction.client.users.cache.get(id)).filter(Boolean);
-  const mentionsMembers=[];
-  for(const id of unique(mentionUserIds)){
-    const m=await interaction.guild.members.fetch(id).catch(()=>null);
-    if(m){mentionsMembers.push(m);if(!mentionsUsers.some(u=>u.id===m.user.id))mentionsUsers.push(m.user);}
+  const prefix = getPrefix(interaction.guildId);
+  const optionParts = [];
+  let referenceMessageId = null;
+  for (const option of interaction.options.data) {
+    if (option.name === 'message_id') referenceMessageId = String(option.value);
+    if (option.type === 6) {
+      const selected = interaction.options.getUser(option.name);
+      if (selected) optionParts.push('<@' + selected.id + '>');
+    } else if (option.type === 8) {
+      const selected = interaction.options.getRole(option.name);
+      if (selected) optionParts.push('<@&' + selected.id + '>');
+    } else if (option.type === 7) {
+      const selected = interaction.options.getChannel(option.name);
+      if (selected) optionParts.push('<#' + selected.id + '>');
+    } else if (option.value !== undefined && option.value !== null) {
+      optionParts.push(String(option.value));
+    }
   }
-  const mentionsRoles=unique(mentionRoleIds).map(id=>interaction.guild.roles.cache.get(id)).filter(Boolean);
-  const mentionsChannels=unique(mentionChannelIds).map(id=>interaction.guild.channels.cache.get(id)).filter(Boolean);
-  const makeCollection=items=>({first:()=>items[0]||null,at:i=>items[i]||null,values:()=>items.values(),[Symbol.iterator]:()=>items[Symbol.iterator]()});
-  let initialResponseUsed=false;
-  const sendResponse=(...sendArgs)=>{
-    if(!initialResponseUsed){initialResponseUsed=true;return interaction.editReply(...sendArgs);}
+  const body = optionParts.join(' ').trim();
+  const content = prefix + command + (body ? ' ' + body : '');
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member) return interaction.editReply('❌ I could not load your server member record.');
+  const userIds = [...content.matchAll(/<@!?(\d{15,25})>/g)].map(m => m[1]);
+  const roleIds = [...content.matchAll(/<@&(\d{15,25})>/g)].map(m => m[1]);
+  const channelIds = [...content.matchAll(/<#(\d{15,25})>/g)].map(m => m[1]);
+  const unique = values => [...new Set(values)];
+  const users = unique(userIds).map(id => interaction.client.users.cache.get(id)).filter(Boolean);
+  const members = [];
+  for (const id of unique(userIds)) {
+    const fetched = await interaction.guild.members.fetch(id).catch(() => null);
+    if (fetched) {
+      members.push(fetched);
+      if (!users.some(user => user.id === fetched.user.id)) users.push(fetched.user);
+    }
+  }
+  const roles = unique(roleIds).map(id => interaction.guild.roles.cache.get(id)).filter(Boolean);
+  const channels = unique(channelIds).map(id => interaction.guild.channels.cache.get(id)).filter(Boolean);
+  const makeCollection = items => ({
+    first: () => items[0] || null,
+    at: index => items[index] || null,
+    values: () => items.values(),
+    [Symbol.iterator]: () => items[Symbol.iterator]()
+  });
+  let initialResponseUsed = false;
+  const sendResponse = (...sendArgs) => {
+    if (!initialResponseUsed) {
+      initialResponseUsed = true;
+      return interaction.editReply(...sendArgs);
+    }
     return interaction.followUp(...sendArgs);
   };
-  const channelProxy=new Proxy(interaction.channel,{
-    get(target,prop){if(prop==='send')return(...sendArgs)=>sendResponse(...sendArgs);const value=Reflect.get(target,prop,target);return typeof value==='function'?value.bind(target):value;}
+  const channelProxy = new Proxy(interaction.channel, {
+    get(target, prop) {
+      if (prop === 'send') return (...sendArgs) => sendResponse(...sendArgs);
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
   });
-  const fakeMessage={
-    id:'slash-'+interaction.id,content,author:interaction.user,member,guild:interaction.guild,channel:channelProxy,
-    attachments:[],reference:messageId?{messageId}:null,
-    mentions:{
-      users:makeCollection(mentionsUsers),members:makeCollection(mentionsMembers),
-      roles:makeCollection(mentionsRoles),channels:makeCollection(mentionsChannels),
-      values:()=>mentionsUsers.values()
+  const fakeMessage = {
+    id: 'slash-' + interaction.id,
+    content,
+    author: interaction.user,
+    member,
+    guild: interaction.guild,
+    channel: channelProxy,
+    attachments: [],
+    reference: referenceMessageId ? { messageId: referenceMessageId } : null,
+    mentions: {
+      users: makeCollection(users),
+      members: makeCollection(members),
+      roles: makeCollection(roles),
+      channels: makeCollection(channels),
+      values: () => users.values()
     },
-    delete:async()=>{},react:async()=>({}),
-    reply:(...replyArgs)=>sendResponse(...replyArgs)
+    delete: async () => {},
+    react: async () => ({}),
+    reply: (...replyArgs) => sendResponse(...replyArgs)
   };
   await handleCommandMessage(fakeMessage);
-  if(!initialResponseUsed)await interaction.editReply('✅ Done.').catch(()=>{});
+  if (!initialResponseUsed) await interaction.editReply('✅ Done.').catch(() => {});
 }
 
 async function recoverTicketPanels() {
