@@ -1604,8 +1604,8 @@ async function handleCommandMessage(message) {
       const pages = [
         ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
         ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
-        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
-        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
+        ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply','webhook']],
+        ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','67','help']]
       ];
       const [title, keys] = pages[0];
       const lines = keys.map(k => {
