@@ -57,6 +57,7 @@ const defaultData = {
   reportsReceived: {},
   staffStats: {},
   staffCases: {},
+  active67: {},
 };
 let data = loadData();
 function loadData() {
@@ -170,6 +171,7 @@ const editedSnipes = new Map(); // channelId -> message data
 const tempMuteTimers = new Map();
 const blehhhCooldowns = new Map();
 const blehhhTimers = new Map();
+const active67Timers = new Map();
 const reportCooldowns = new Map();
 const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
 const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
@@ -230,6 +232,50 @@ function canBotModerate(target) {
   return me.roles.highest.position > target.roles.highest.position;
 }
 async function safeDelete(msg) { try { await msg.delete(); } catch {} }
+
+async function cleanupRecentTargetMessages(guild, targetId, commandChannel) {
+  const seen = new Set();
+  const deleteFrom = async (channel, limit) => {
+    if (!channel?.isTextBased?.() || !channel.messages?.fetch) return 0;
+    const me = guild.members.me;
+    if (me && !channel.permissionsFor(me)?.has(PermissionsBitField.Flags.ManageMessages)) return 0;
+    const fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!fetched) return 0;
+    const matches = [...fetched.values()].filter(m => m.author?.id === targetId && !seen.has(m.id))
+      .sort((a,b) => b.createdTimestamp-a.createdTimestamp).slice(0,limit);
+    let deleted=0;
+    for (const msg of matches) { seen.add(msg.id); try { await msg.delete(); deleted++; } catch {} }
+    return deleted;
+  };
+  await deleteFrom(commandChannel,20);
+  let remaining=5;
+  const channels=[...guild.channels.cache.values()]
+    .filter(c=>c.id!==commandChannel.id&&c.type===ChannelType.GuildText)
+    .sort((a,b)=>(b.lastMessageTimestamp||0)-(a.lastMessageTimestamp||0));
+  for(const channel of channels){if(remaining<=0)break;remaining-=await deleteFrom(channel,remaining);}
+}
+
+async function end67Effect(guild,userId) {
+  const effectKey=key(guild.id,userId), saved=data.active67?.[effectKey];
+  if(!saved)return;
+  const member=await guild.members.fetch(userId).catch(()=>null);
+  if(member){
+    if(member.roles.cache.has('1565764777010139346'))await member.roles.remove('1565764777010139346','67 effect expired').catch(()=>{});
+    if(member.nickname==='677 NOOB LOL')await member.setNickname(saved.previousNickname??null,'67 effect expired').catch(()=>{});
+  }
+  delete data.active67[effectKey];saveData();
+  const timer=active67Timers.get(effectKey);if(timer)clearTimeout(timer);active67Timers.delete(effectKey);
+}
+function schedule67Effect(guild,userId,expiresAt){
+  const effectKey=key(guild.id,userId),old=active67Timers.get(effectKey);if(old)clearTimeout(old);
+  active67Timers.set(effectKey,setTimeout(()=>end67Effect(guild,userId).catch(e=>console.error('67 expiry error:',e)),Math.max(0,expiresAt-Date.now())));
+}
+async function restore67Effects(){
+  for(const [effectKey,saved] of Object.entries(data.active67||{})){
+    const [guildId,userId]=effectKey.split(':'),guild=client.guilds.cache.get(guildId);if(!guild)continue;
+    if(saved.expiresAt<=Date.now())await end67Effect(guild,userId);else schedule67Effect(guild,userId,saved.expiresAt);
+  }
+}
 async function sendTemp(channel, content, ms = 7000) {
   const m = await channel.send(content).catch(() => null);
   if (m) setTimeout(() => m.delete().catch(() => {}), ms);
@@ -333,7 +379,7 @@ function commandList(prefix) {
     [`${prefix}lock`, 'Lock this channel so @everyone cannot send messages.'],
     [`${prefix}unlock`, 'Unlock this channel so @everyone can send messages again.'],
     [`${prefix}p/ c/ purge <amount>`, 'Delete recent messages.'],
-    [`${prefix}s/ snipe`, 'Show the latest deleted message in this channel.'],
+    [`${prefix}s/ snipe [number]`, 'Show the Nth most recently deleted message (1 = newest).'],
     [`${prefix}cs`, 'Clear deleted-message snipes.'],
     [`${prefix}es`, 'Show the latest edited message in this channel.'],
     [`${prefix}ces`, 'Clear edited-message snipes.'],
@@ -345,7 +391,7 @@ function commandList(prefix) {
     [`${prefix}kick @user [reason]`, 'Kick a member and DM the kick card.'],
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
-    [`${prefix}pus @user <amount>`, 'Purge a specific member’s recent messages. Example: !pus @user 10.'],
+    [`${prefix}67 give @user`, 'Give the 67 NOOB effect for five minutes (Level 67 or Owner role).'],
     [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
     [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3C User Report log to an existing channel.'],
     [`${prefix}hug @user`, 'Hug a member.'],
@@ -499,7 +545,8 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initializeMongoDB();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
-  client.user.setPresence({ activities: [{ name: '3C moderation' }], status: 'online' });
+  await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
+  client.user.setPresence({ activities: [{ name: 'With Chriswizkid' }], status: 'online' });
 });
 
 // React to every message from a member currently holding the Blehhh role.
@@ -511,10 +558,13 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('messageDelete', async (message) => {
-  if (!message.guild || !message.author || message.author.bot) return;
-  const history = deletedSnipes.get(message.channel.id) || [];
-  history.unshift({ authorId: message.author.id, authorTag: message.author.tag, content: message.content || '[no text]', attachments: [...message.attachments.values()].map(a => a.url), time: Date.now() });
-  deletedSnipes.set(message.channel.id, history.slice(0, 50));
+  try {
+    if (message.partial) message = await message.fetch().catch(() => message);
+    if (!message.guild || !message.author || message.author.bot) return;
+    const history=deletedSnipes.get(message.channel.id)||[];
+    history.unshift({id:message.id,authorId:message.author.id,authorTag:message.author.tag,content:message.content||'[no text]',attachments:[...message.attachments.values()].map(a=>a.url),time:Date.now()});
+    deletedSnipes.set(message.channel.id,history.slice(0,100));
+  } catch(error) { console.error('Snipe capture error:',error); }
 });
 
 client.on('messageUpdate', async (oldMessage, newMessage) => {
@@ -532,6 +582,12 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
 
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.author.bot) return;
+  if (data.active67?.[key(message.guild.id,message.author.id)]) {
+    const emoji=message.guild.emojis.cache.find(e=>e.name==='6777');
+    if(emoji)await message.react(emoji).catch(()=>{});
+  }
+  const asksWhereTryout=String(message.content||'').split(/\r?\n/).some(line=>/\bwhere\b/i.test(line)&&/\btryouts?\b/i.test(line));
+  if(asksWhereTryout)await message.reply({content:`Hi <@${message.author.id}>, Check <#1538058240582221886> For The Tryouts!`,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
   const memberForActivity = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
   if (isStaffMember(memberForActivity)) {
     const activity = staffStatsFor(message.guild.id, message.author.id);
@@ -1193,6 +1249,27 @@ client.on('messageCreate', async (message) => {
         allowedMentions: { parse: [] },
       });
     }
+    // 67 NOOB — five-minute role, nickname and message reaction.
+    if(cmd==='67'){
+      const allowed=message.member.roles.cache.has('1563493318694797372')||message.member.roles.cache.has('1514265901388533782');
+      if(!allowed)return sendTemp(message.channel,'❌ You need the Level 67 or Owner role to use this.',5000);
+      if(String(args[0]||'').toLowerCase()!=='give'||!target)return sendTemp(message.channel,`Usage: ${prefix}67 give @user`,5000);
+      if(target.id===message.author.id)return sendTemp(message.channel,'❌ You cannot 67 yourself.',5000);
+      const me=message.guild.members.me,role=message.guild.roles.cache.get('1565764777010139346');
+      if(!me?.permissions.has(PermissionsBitField.Flags.ManageRoles)||!me.permissions.has(PermissionsBitField.Flags.ManageNicknames))
+        return sendTemp(message.channel,'❌ I need Manage Roles and Manage Nicknames permissions.',6000);
+      if(!role||me.roles.highest.position<=role.position)return sendTemp(message.channel,'❌ I cannot manage the configured 67 NOOBBB role. Check its position above the bot.',6000);
+      const effectKey=key(message.guild.id,target.id),existing=data.active67?.[effectKey];
+      try{
+        if(!existing)data.active67[effectKey]={previousNickname:target.nickname,expiresAt:Date.now()+300000};
+        else data.active67[effectKey].expiresAt=Date.now()+300000;
+        await target.roles.add(role,`67 effect activated by ${message.author.tag}`);
+        await target.setNickname('677 NOOB LOL',`67 effect activated by ${message.author.tag}`);
+        saveData();schedule67Effect(message.guild,target.id,data.active67[effectKey].expiresAt);
+        return sendTemp(message.channel,`💀 ${target} has been 67'ed for 5 minutes.`,5000);
+      }catch(error){console.error('67 command error:',error);if(!existing)delete data.active67[effectKey];saveData();return sendTemp(message.channel,'❌ I could not apply the 67 effect. Check my role and nickname permissions.',6000);}
+    }
+
     // KICK
     if (cmd === 'kick') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.KickMembers)) return sendTemp(message.channel, '❌ You need **Kick Members** permission.', 5000);
@@ -1200,6 +1277,7 @@ client.on('messageCreate', async (message) => {
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot kick that member because of role hierarchy.', 5000);
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'kick', message.author, reason);
+      await cleanupRecentTargetMessages(message.guild,target.id,message.channel);
       await target.kick(reason || undefined);
       recordStaffAction(message.guild.id, message.author.id, 'kick', target.id, reason, '3c');
       await auditLog(message.guild, '👢 Member Kicked', `${target.user} was kicked by ${message.author}.`, 0xE67E22, [
@@ -1215,6 +1293,7 @@ client.on('messageCreate', async (message) => {
       if (!canAct(message.member, target)) return sendTemp(message.channel, '❌ You cannot ban that member because of role hierarchy.', 5000);
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       await dmModeration(target.user, message.guild, 'ban', message.author, reason);
+      await cleanupRecentTargetMessages(message.guild,target.id,message.channel);
       await target.ban({ reason: reason || undefined });
       recordStaffAction(message.guild.id, message.author.id, 'ban', target.id, reason, '3c');
       await auditLog(message.guild, '🔨 Member Banned', `${target.user} was banned by ${message.author}.`, 0xE74C3C, [
@@ -1235,20 +1314,6 @@ client.on('messageCreate', async (message) => {
       return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}**.`, 6000);
     }
 
-    // PURGE USER
-    if (cmd === 'pus') {
-      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission.', 5000);
-      if (!target) return sendTemp(message.channel, `Usage: ${prefix}pus @user <amount>`, 5000);
-      const amount = Number(removeMentionArgs(args)[0]);
-      if (!Number.isInteger(amount) || amount < 1 || amount > 100) return sendTemp(message.channel, `Usage: ${prefix}pus @user <1-100>`, 5000);
-      const fetched = await message.channel.messages.fetch({ limit: 100 });
-      const matches = fetched.filter(m => m.author.id === target.id).first(amount);
-      let deleted = 0;
-      const recent = matches.filter(m => Date.now() - m.createdTimestamp < 14 * 86400000);
-      if (recent.size) deleted += (await message.channel.bulkDelete(recent, true)).size;
-      for (const m of matches.filter(m => !recent.has(m.id)).values()) { await m.delete().then(() => deleted++).catch(() => {}); }
-      return sendTemp(message.channel, `🧹 Deleted **${deleted}** messages from **${target.user.tag}**.`, 6000);
-    }
 
     // USER REPORTS
     if (cmd === 'report') {
@@ -1382,7 +1447,7 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'commands') {
       const pages = [
         ['🛡️ 3C Moderation', ['warn','unwarn','warnings','mute/timeout','unmute/untimeout','kick','ban','unban']],
-        ['🧹 3C Management', ['p/ c/ purge','pus','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
+        ['🧹 3C Management', ['p/ c/ purge','s/ snipe','cs','es','ces','nick/ n','clearnick/ cn','role/ r add|give|remove','slowmode','lock','unlock']],
         ['🎟️ 3C Tickets & Server', ['ticket','closeticket/ ct','setupaudit','serverinfo','prefix','say','reply']],
         ['😛 3C Fun & Other', ['hug','kiss','slap','blehhh','unblehhh','afk','help']]
       ];
