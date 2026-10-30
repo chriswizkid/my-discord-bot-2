@@ -18,6 +18,7 @@ const {
   ChannelType,
   OverwriteType,
   AuditLogEvent,
+  WebhookClient,
 } = require('discord.js');
 
 const fs = require('fs');
@@ -59,6 +60,7 @@ const defaultData = {
   staffCases: {},
   active67: {},
   emergencyCleanup: {},
+  webhooks: {},
 };
 let data = loadData();
 function loadData() {
@@ -404,6 +406,7 @@ function commandList(prefix) {
     [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
     [`${prefix}embed #HEX <message>`, 'Send multiline text, Markdown and mentions inside a custom-color embed; attach a photo to include it.'],
     [`${prefix}panelbutton <messageID> | label | #channel or URL`, 'Add a button to one of your bot messages.'],
+    [`${prefix}webhook`, 'Open the interactive webhook creator and manager.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
     [`${prefix}slowmode <time|off>`, 'Set channel slowmode or turn it off, e.g. 10s, 5m, 1h, off.'],
@@ -443,7 +446,7 @@ const slashCommandSpecs = [
   ['mute','Timeout a member.'],['unmute','Remove a member timeout.'],['afk','Set your AFK status.'],
   ['nick','Change a member nickname.'],['clearnick','Clear a member nickname.'],['serverinfo','View server information.'],
   ['roleinfo','View role information.'],['checkuser','View a member profile.'],['modcheck','View staff moderation statistics.'],
-  ['embed','Create a custom-colour embed.'],['panelbutton','Add a button to a bot panel.'],['role','Add or remove a role.'],
+  ['embed','Create a custom-colour embed.'],['panelbutton','Add a button to a bot panel.'],['webhook','Open the interactive webhook builder.'],['role','Add or remove a role.'],
   ['prefix','Change the server prefix.'],['slowmode','Set channel slowmode.'],['lock','Lock this channel.'],['unlock','Unlock this channel.'],
   ['purge','Delete recent channel messages.'],['snipe','Show a deleted message by its position.'],['s','Alias for snipe.'],
   ['cs','Clear deleted-message history.'],['es','Show the latest edited message.'],['ces','Clear edited-message history.'],
@@ -1287,6 +1290,16 @@ async function handleCommandMessage(message) {
       return;
     }
 
+    // INTERACTIVE WEBHOOK PANEL
+    if(cmd==='webhook'){
+      if(!hasPerm(message.member,PermissionsBitField.Flags.ManageWebhooks))return sendTemp(message.channel,'❌ You need **Manage Webhooks** permission.',5000);
+      const row=new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('webhook:create').setLabel('Create Webhook').setEmoji('➕').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('webhook:list').setLabel('Manage Webhooks').setEmoji('⚙️').setStyle(ButtonStyle.Primary)
+      );
+      return message.channel.send({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('3C Bot • Webhook Studio').setDescription('Create a webhook, compose branded messages with embeds, add link buttons, and manage webhooks created by 3C Bot.')],components:[row]});
+    }
+
     // TICKET PANEL CREATOR — ?ticket posts a setup button; the button opens the modal.
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
@@ -1736,6 +1749,171 @@ client.on('interactionCreate', async (interaction) => {
 
       return interaction.update({ embeds: [e], components: [row] });
     }
+
+    // WEBHOOK STUDIO — all actions are permission-checked and scoped to saved webhooks.
+    const canManageWebhooks=()=>Boolean(interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageWebhooks));
+    const savedWebhooks=()=>data.webhooks?.[interaction.guildId]||{};
+    const findSavedWebhook=id=>savedWebhooks()[id]||null;
+
+    if(interaction.isButton()&&interaction.customId==='webhook:create'){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId('webhook:create:modal').setTitle('Create a Webhook');
+      const field=(id,label,placeholder,style=TextInputStyle.Short,required=false,max=400)=>new TextInputBuilder().setCustomId(id).setLabel(label).setPlaceholder(placeholder).setStyle(style).setRequired(required).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(field('webhook:name','Webhook name','3C Announcements',TextInputStyle.Short,true,80)),
+        new ActionRowBuilder().addComponents(field('webhook:channel','Destination channel ID','Paste a text channel ID',TextInputStyle.Short,true,25)),
+        new ActionRowBuilder().addComponents(field('webhook:avatar','Avatar image URL','https://...',TextInputStyle.Short,false,400))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if(interaction.isModalSubmit()&&interaction.customId==='webhook:create:modal'){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const name=interaction.fields.getTextInputValue('webhook:name').trim();
+      const channelId=interaction.fields.getTextInputValue('webhook:channel').trim().replace(/^<#|>$/g,'');
+      const avatar=interaction.fields.getTextInputValue('webhook:avatar').trim();
+      if(!/^\d{15,25}$/.test(channelId))return interaction.reply({content:'❌ Enter a valid text channel ID.',ephemeral:true});
+      if(avatar&&!/^https:\/\/\S+$/i.test(avatar))return interaction.reply({content:'❌ Avatar must be a valid HTTPS image URL.',ephemeral:true});
+      const channel=await interaction.guild.channels.fetch(channelId).catch(()=>null);
+      if(!channel||![ChannelType.GuildText,ChannelType.GuildAnnouncement].includes(channel.type))
+        return interaction.reply({content:'❌ Choose a server text or announcement channel.',ephemeral:true});
+      try{
+        const webhook=await channel.createWebhook({name,avatar:avatar||undefined,reason:`Webhook created by ${interaction.user.tag} using 3C Bot Webhook Studio`});
+        if(!webhook.token)throw new Error('Discord did not return a webhook token.');
+        if(!data.webhooks[interaction.guildId])data.webhooks[interaction.guildId]={};
+        data.webhooks[interaction.guildId][webhook.id]={id:webhook.id,token:webhook.token,channelId,name,createdBy:interaction.user.id,createdAt:Date.now(),lastMessageId:null};
+        saveData();
+        const row=new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`webhook:compose:${webhook.id}`).setLabel('Compose Message').setEmoji('✍️').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`webhook:buttons:${webhook.id}`).setLabel('Add Link Buttons').setEmoji('🔗').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`webhook:delete:${webhook.id}`).setLabel('Delete Webhook').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
+        );
+        return interaction.reply({content:`✅ Webhook **${name}** created in <#${channelId}>. Use the controls below to compose messages or manage it.`,components:[row],ephemeral:true});
+      }catch(error){console.error('Webhook create error:',error);return interaction.reply({content:'❌ I could not create that webhook. Check my Manage Webhooks permission and channel permissions.',ephemeral:true});}
+    }
+
+    if(interaction.isButton()&&interaction.customId==='webhook:list'){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const entries=Object.values(savedWebhooks());
+      if(!entries.length)return interaction.reply({content:'No 3C Bot-managed webhooks have been saved in this server yet.',ephemeral:true});
+      const menu=new StringSelectMenuBuilder().setCustomId('webhook:select').setPlaceholder('Choose a webhook to manage').addOptions(entries.slice(0,25).map(w=>({label:String(w.name||'Webhook').slice(0,100),description:`Channel ${w.channelId}`,value:w.id})));
+      return interaction.reply({content:'Select a saved webhook:',components:[new ActionRowBuilder().addComponents(menu)],ephemeral:true});
+    }
+
+    if(interaction.isStringSelectMenu()&&interaction.customId==='webhook:select'){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.values[0],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ That saved webhook no longer exists.',ephemeral:true});
+      const row=new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`webhook:compose:${id}`).setLabel('Compose / Resend').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`webhook:buttons:${id}`).setLabel('Add Link Buttons').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`webhook:delete:${id}`).setLabel('Delete').setStyle(ButtonStyle.Danger)
+      );
+      return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}`,components:[row]});
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:compose:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`webhook:compose:modal:${id}`).setTitle('Compose Webhook Message');
+      const field=(fieldId,label,placeholder,style=TextInputStyle.Short,required=false,max=4000)=>new TextInputBuilder().setCustomId(fieldId).setLabel(label).setPlaceholder(placeholder).setStyle(style).setRequired(required).setMaxLength(max);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(field('webhook:content','Message content','Text and mentions (optional)',TextInputStyle.Paragraph,false,2000)),
+        new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Title (optional)',TextInputStyle.Short,false,256)),
+        new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Description (optional)',TextInputStyle.Paragraph,false,3000)),
+        new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7)),
+        new ActionRowBuilder().addComponents(field('webhook:image','Embed image URL','https://... (optional)',TextInputStyle.Short,false,400))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if(interaction.isModalSubmit()&&interaction.customId.startsWith('webhook:compose:modal:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[3],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const content=interaction.fields.getTextInputValue('webhook:content').trim();
+      const title=interaction.fields.getTextInputValue('webhook:title').trim();
+      const description=interaction.fields.getTextInputValue('webhook:description').trim();
+      const colorRaw=interaction.fields.getTextInputValue('webhook:color').trim()||'#5865F2';
+      const imageUrl=interaction.fields.getTextInputValue('webhook:image').trim();
+      const color=colorRaw.replace(/^#/,'');
+      if(!/^[0-9a-fA-F]{6}$/.test(color))return interaction.reply({content:'❌ Embed colour must be a six-digit hex value, e.g. #5865F2.',ephemeral:true});
+      if(imageUrl&&!/^https:\/\/\S+$/i.test(imageUrl))return interaction.reply({content:'❌ Embed image must be a valid HTTPS URL.',ephemeral:true});
+      if(!content&&!title&&!description&&!imageUrl)return interaction.reply({content:'❌ Add message content or at least one embed field.',ephemeral:true});
+      const embed=new EmbedBuilder().setColor(parseInt(color,16));
+      if(title)embed.setTitle(title);
+      if(description)embed.setDescription(description);
+      if(imageUrl)embed.setImage(imageUrl);
+      try{
+        const hook=new WebhookClient({id:record.id,token:record.token});
+        const sent=await hook.send({content:content||undefined,embeds:[title||description||imageUrl?embed:null].filter(Boolean),allowedMentions:{parse:[]}});
+        record.lastMessageId=sent.id;record.lastMessageChannelId=record.channelId;saveData();
+        return interaction.reply({content:`✅ Webhook message sent to <#${record.channelId}>. Message ID: \`${sent.id}\`\nUse **Add Link Buttons** to attach URL buttons.`,ephemeral:true});
+      }catch(error){console.error('Webhook send error:',error);return interaction.reply({content:'❌ I could not send that webhook message. The webhook may have been deleted or its token is no longer valid.',ephemeral:true});}
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:buttons:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`webhook:buttons:modal:${id}`).setTitle('Add Link Buttons');
+      const field=(fieldId,label,placeholder,required=false)=>new TextInputBuilder().setCustomId(fieldId).setLabel(label).setPlaceholder(placeholder).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(100);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(field('webhook:messageid','Message ID','Leave blank to use the latest sent message')),
+        new ActionRowBuilder().addComponents(field('webhook:button1label','Button 1 label','Open website')),
+        new ActionRowBuilder().addComponents(field('webhook:button1url','Button 1 HTTPS URL','https://example.com')),
+        new ActionRowBuilder().addComponents(field('webhook:button2label','Button 2 label','Optional')),
+        new ActionRowBuilder().addComponents(field('webhook:button2url','Button 2 HTTPS URL','https://example.com'))
+      );
+      return interaction.showModal(modal);
+    }
+
+    if(interaction.isModalSubmit()&&interaction.customId.startsWith('webhook:buttons:modal:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[3],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const messageId=interaction.fields.getTextInputValue('webhook:messageid').trim()||record.lastMessageId;
+      if(!messageId)return interaction.reply({content:'❌ Send a webhook message first, or provide its message ID.',ephemeral:true});
+      const labels=[interaction.fields.getTextInputValue('webhook:button1label').trim(),interaction.fields.getTextInputValue('webhook:button2label').trim()];
+      const urls=[interaction.fields.getTextInputValue('webhook:button1url').trim(),interaction.fields.getTextInputValue('webhook:button2url').trim()];
+      const row=new ActionRowBuilder();
+      for(let i=0;i<2;i++){
+        if(!labels[i]&&!urls[i])continue;
+        if(!labels[i]||!/^https:\/\/\S+$/i.test(urls[i]))return interaction.reply({content:`❌ Button ${i+1} needs a label and a valid HTTPS URL.`,ephemeral:true});
+        row.addComponents(new ButtonBuilder().setLabel(labels[i]).setURL(urls[i]).setStyle(ButtonStyle.Link));
+      }
+      if(!row.components.length)return interaction.reply({content:'❌ Add at least one link button.',ephemeral:true});
+      try{
+        const hook=new WebhookClient({id:record.id,token:record.token});
+        await hook.editMessage(messageId,{components:[row]});
+        return interaction.reply({content:'✅ Link buttons added to the webhook message.',ephemeral:true});
+      }catch(error){console.error('Webhook button update error:',error);return interaction.reply({content:'❌ I could not update that webhook message. Check the message ID and webhook.',ephemeral:true});}
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:delete:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      const row=new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`webhook:deleteconfirm:${id}`).setLabel('Confirm Delete').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('webhook:deletecancel').setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+      );
+      return interaction.reply({content:`Delete webhook **${record.name}**? This cannot be undone.`,components:[row],ephemeral:true});
+    }
+
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:deleteconfirm:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
+      if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
+      try{
+        await new WebhookClient({id:record.id,token:record.token}).delete('Deleted from 3C Bot Webhook Studio');
+        delete data.webhooks[interaction.guildId][id];saveData();
+        return interaction.update({content:`✅ Webhook **${record.name}** deleted.`,components:[]});
+      }catch(error){console.error('Webhook delete error:',error);return interaction.update({content:'❌ Could not delete the webhook. It may already have been removed.',components:[]});}
+    }
+    if(interaction.isButton()&&interaction.customId==='webhook:deletecancel')
+      return interaction.update({content:'Webhook deletion cancelled.',components:[]});
 
     if (interaction.isButton() && interaction.customId.startsWith('ticket:setupopen:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
