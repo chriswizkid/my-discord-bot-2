@@ -1891,9 +1891,9 @@ client.on('interactionCreate', async (interaction) => {
 
     if(interaction.isButton()&&interaction.customId==='webhook:list'){
       if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
-      const entries=Object.values(savedWebhooks());
+      const entries=Object.entries(savedWebhooks()).map(([savedId,w])=>({...w,id:String(w?.id||savedId)})).filter(w=>/^\\d{15,25}$/.test(w.id));
       if(!entries.length)return interaction.reply({content:'No 3C Bot-managed webhooks have been saved in this server yet.',ephemeral:true});
-      const menu=new StringSelectMenuBuilder().setCustomId('webhook:select').setPlaceholder('Choose a webhook to manage').addOptions(entries.slice(0,25).map(w=>({label:String(w.name||'Webhook').slice(0,100),description:`Channel ${w.channelId}`,value:w.id})));
+      const menu=new StringSelectMenuBuilder().setCustomId('webhook:select').setPlaceholder('Choose a webhook to manage').addOptions(entries.slice(0,25).map(w=>({label:String(w.name||'Webhook').slice(0,100),description:`Channel ${w.channelId||'unknown'}`.slice(0,100),value:w.id})));
       return interaction.reply({content:'Select a saved webhook:',components:[new ActionRowBuilder().addComponents(menu)],ephemeral:true});
     }
 
