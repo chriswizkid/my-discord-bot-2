@@ -1840,6 +1840,63 @@ async function handleCommandMessage(message) {
       return sendTemp(message.channel, `Added button: ${label.slice(0, 80)}`, 5000);
     }
 
+
+    if (cmd === 'priv') {
+      const wait=cooldownSeconds(message.guild.id,message.author.id,'priv');
+      if(wait)return sendTemp(message.channel,'⏳ Wait '+wait+'s before using ?priv again.',4000);
+      const links=[
+        'https://www.roblox.com/share?code=8a1bc8d96cd92a40904d142b6ef12975&type=Server',
+        'https://www.roblox.com/share?code=4d349ea237c83a4ba4752394e347908e&type=Server',
+        'https://www.roblox.com/share?code=0cf4491fa4a34f4b8bba6f7120ebb5df&type=Server',
+        'https://www.roblox.com/share?code=f0d9e29386e81648b88399bfa7c89bef&type=Server'
+      ];
+      return message.channel.send('### 🍀 Here Is A Private Server Link You Can Use 🔥\n'+links[Math.floor(Math.random()*links.length)]);
+    }
+
+    if (cmd === 'birthday' || cmd === 'rbirthday') {
+      if(!hasAnyRoleOrAdmin(message.member,[STAFF_ROLE_ID]))return sendTemp(message.channel,'❌ Staff only.',5000);
+      if(!target)return sendTemp(message.channel,'Usage: '+prefix+cmd+' @user',5000);
+      const roleId='1563579108779098244';
+      if(cmd==='rbirthday'){
+        const existing=(data.activeTimedReactions[key(message.guild.id,target.id)]||[]).find(x=>x.kind==='birthday');
+        if(existing)await expireTimedReaction(message.guild,target.id,'birthday');
+        else if(target.roles.cache.has(roleId))await target.roles.remove(roleId,'Birthday effect manually removed').catch(()=>{});
+        return sendTemp(message.channel,'🎂 Removed the birthday effect from '+target+'.',5000);
+      }
+      if(!message.guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles))return sendTemp(message.channel,'❌ I need Manage Roles.',5000);
+      const role=message.guild.roles.cache.get(roleId);if(!role)return sendTemp(message.channel,'❌ Birthday role not found.',5000);
+      await target.roles.add(role,'Birthday effect by '+message.author.tag);
+      scheduleTimedReaction(message.guild,target.id,{kind:'birthday',emoji:'🎂',roleId:roleId,expiresAt:Date.now()+86400000});
+      return sendTemp(message.channel,'🎂 '+target+' has the birthday role and reactions for 24 hours.',5000);
+    }
+
+    if (cmd === '6777' || cmd === 'poop' || cmd === 'reactset') {
+      if(!target)return sendTemp(message.channel,'Usage: '+prefix+cmd+' @user'+(cmd==='reactset'?' emoji duration':''),5000);
+      let kind,emoji,roleId=null,duration;
+      if(cmd==='6777'){
+        if(!hasAnyRoleOrAdmin(message.member,['1563493318694797372']))return sendTemp(message.channel,'❌ Only Level 67 members can use this.',5000);
+        kind='6777';emoji=message.guild.emojis.cache.find(e=>e.name==='6777')||'6777';roleId='1565764777010139346';duration=300000;
+      }else if(cmd==='poop'){
+        if(!hasAnyRoleOrAdmin(message.member,[STAFF_ROLE_ID]))return sendTemp(message.channel,'❌ Staff only.',5000);
+        const wait=cooldownSeconds(message.guild.id,message.author.id,'poop');if(wait)return sendTemp(message.channel,'⏳ Wait '+wait+'s before using ?poop again.',4000);
+        kind='poop';emoji='💩';roleId='1562791606581469314';duration=300000;
+      }else{
+        const allowed=['1514268943446179881','1514268813938397237','1556940387728228424','1558562402130337883','1514268254477226044','1515348156265664685','1561766518612697099','1514265901388533782','1539966630451220560'];
+        if(!hasAnyRoleOrAdmin(message.member,allowed))return sendTemp(message.channel,'you dont have permission to use this',5000);
+        const rest=args.filter(x=>!/^<@!?\d+>$/.test(x));
+        emoji=rest[0];duration=parseDuration(rest[1]);
+        if(!emoji||!duration||duration>2592000000)return sendTemp(message.channel,'Usage: '+prefix+'reactset @user emoji duration (max 30 days)',6000);
+        kind='reactset-'+message.author.id;
+      }
+      if(roleId){
+        if(!message.guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles))return sendTemp(message.channel,'❌ I need Manage Roles.',5000);
+        const role=message.guild.roles.cache.get(roleId);if(!role)return sendTemp(message.channel,'❌ Configured role not found.',5000);
+        await target.roles.add(role,kind+' effect by '+message.author.tag);
+      }
+      scheduleTimedReaction(message.guild,target.id,{kind:kind,emoji:String(emoji),roleId:roleId,expiresAt:Date.now()+duration});
+      return sendTemp(message.channel,String(emoji)+' Applied to '+target+' for '+prettyDuration(duration)+'.',5000);
+    }
+
     if (cmd === 'help') {
       const wanted = (args[0] || '').toLowerCase().replace(prefix, '');
       const found = commandList(prefix).find(([a]) => a.toLowerCase().replaceAll(prefix, '').split(/[ /]/)[0] === wanted);
