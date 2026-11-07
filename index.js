@@ -1911,6 +1911,31 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}`,components:[row]});
     }
 
+    if(interaction.isButton()&&interaction.customId.startsWith('webhook:editmeta:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[2],live=await interaction.guild.fetchWebhooks().catch(()=>null),hook=live?.get(id);
+      if(!hook)return interaction.reply({content:'❌ I could not find that webhook in this server.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId(`webhook:editmeta:modal:${id}`).setTitle('Edit Webhook Settings');
+      const field=(fid,label,value,required=false,max=400)=>new TextInputBuilder().setCustomId(fid).setLabel(label).setValue(String(value||'').slice(0,max)).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
+      modal.addComponents(new ActionRowBuilder().addComponents(field('webhook:name','Webhook name',hook.name,true,80)),new ActionRowBuilder().addComponents(field('webhook:channel','Destination channel ID',hook.channelId,true,25)),new ActionRowBuilder().addComponents(field('webhook:avatar','Avatar image URL (blank keeps current)','',false,400)));
+      return interaction.showModal(modal);
+    }
+    if(interaction.isModalSubmit()&&interaction.customId.startsWith('webhook:editmeta:modal:')){
+      if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
+      const id=interaction.customId.split(':')[3],name=interaction.fields.getTextInputValue('webhook:name').trim(),channelId=interaction.fields.getTextInputValue('webhook:channel').trim().replace(/^<#|>$/g,''),avatar=interaction.fields.getTextInputValue('webhook:avatar').trim();
+      if(!name||!/^\d{15,25}$/.test(channelId))return interaction.reply({content:'❌ Enter a webhook name and valid destination channel ID.',ephemeral:true});
+      if(avatar){let parsed;try{parsed=new URL(avatar);}catch{}if(!parsed||parsed.protocol!=='https:')return interaction.reply({content:'❌ Avatar must be a valid HTTPS image URL.',ephemeral:true});}
+      const channel=await interaction.guild.channels.fetch(channelId).catch(()=>null);
+      if(!channel||![ChannelType.GuildText,ChannelType.GuildAnnouncement].includes(channel.type))return interaction.reply({content:'❌ Choose a text or announcement channel in this server.',ephemeral:true});
+      try{
+        const fresh=await interaction.guild.fetchWebhooks(),selected=fresh.get(id);if(!selected)throw new Error('Webhook not found');
+        await selected.edit({name,channel:channel.id,...(avatar?{avatar}:{}),reason:'Webhook edited by '+interaction.user.tag+' in 3C Bot'});
+        const record=data.webhooks[interaction.guildId]?.[id]||{id:id,token:null};
+        Object.assign(record,{id:id,name:name,channelId:channel.id});if(!data.webhooks[interaction.guildId])data.webhooks[interaction.guildId]={};data.webhooks[interaction.guildId][id]=record;saveData();
+        return interaction.reply({content:'✅ Updated **'+name+'** and moved it to <#'+channel.id+'>.',ephemeral:true});
+      }catch(error){console.error('Webhook metadata edit failed:',error);return interaction.reply({content:'❌ I could not edit that webhook. Check the bot’s Manage Webhooks permission.',ephemeral:true});}
+    }
+
     if(interaction.isButton()&&interaction.customId.startsWith('webhook:update:')){
       if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
       const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
