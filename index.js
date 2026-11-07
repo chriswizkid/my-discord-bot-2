@@ -1782,7 +1782,7 @@ async function handleCommandMessage(message) {
       return message.channel.send(buildCommandsPayload(prefix, 0));
     }
     if (cmd === 'embed') {
-      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages) && !isAdministrator(message.member)) {
         return sendTemp(message.channel, 'You need Manage Messages to create embeds.', 6000);
       }
       const raw = message.content.slice(prefix.length + cmd.length).trimStart();
@@ -1889,7 +1889,7 @@ async function handleCommandMessage(message) {
       let kind,emoji,roleId=null,duration;
       if(cmd==='6777'){
         if(!hasAnyRoleOrAdmin(message.member,['1563493318694797372']))return sendTemp(message.channel,'❌ Only Level 67 members can use this.',5000);
-        kind='6777';emoji=message.guild.emojis.cache.find(e=>e.name==='6777')||'6777';roleId='1565764777010139346';duration=300000;
+        kind='6777';emoji=message.guild.emojis.cache.find(e=>e.name==='6777');if(!emoji)return sendTemp(message.channel,'❌ I could not find the 6777 emoji in this server.',5000);roleId='1565764777010139346';duration=300000;
       }else if(cmd==='poop'){
         if(!hasAnyRoleOrAdmin(message.member,[STAFF_ROLE_ID]))return sendTemp(message.channel,'❌ Staff only.',5000);
         const wait=cooldownSeconds(message.guild.id,message.author.id,'poop');if(wait)return sendTemp(message.channel,'⏳ Wait '+wait+'s before using ?poop again.',4000);
