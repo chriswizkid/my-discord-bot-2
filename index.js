@@ -213,7 +213,7 @@ const reportCooldowns = new Map();
 const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
 const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
 const BLEHHH_ROLE_ID = '1555571971801088031';
-const BLEHHH_COOLDOWN_MS = 10 * 1000;
+const BLEHHH_COOLDOWN_MS = 30 * 1000;
 const BLEHHH_MIN_MS = 10 * 1000;
 const BLEHHH_MAX_MS = 30 * 60 * 1000;
 
@@ -469,7 +469,12 @@ function commandList(prefix) {
     [`${prefix}checkuser @user`, 'Show a normal member profile and tracked warnings received (Level 30+ role).'],
     [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
     [`${prefix}embed #HEX <message>`, 'Send multiline text, Markdown and mentions inside a custom-color embed; attach a photo to include it.'],
-    [`${prefix}panelbutton <messageID> | label | #channel or URL`, 'Add a button to one of your bot messages.'],
+    [`${prefix}panelbutton / button <messageID> | label | #channel or URL`, 'Add a link or channel button to a bot message.'],
+    [`${prefix}priv`, 'Send a random Roblox private-server link.'],
+    [`${prefix}birthday @user / rbirthday @user`, 'Give or remove the 24-hour birthday effect (staff).'],
+    [`${prefix}6777 @user`, 'Give the 6777 role and reaction for five minutes (Level 67).'],
+    [`${prefix}poop @user`, 'Give the Poop role and reaction for five minutes (staff).'],
+    [`${prefix}reactset @user emoji duration`, 'Apply a custom reaction for a duration using an authorized role.'],
     [`${prefix}webhook`, 'Open the interactive webhook creator and manager.'],
     [`${prefix}role/ r add|give|remove @user <role>`, 'Add or remove a role by name.'],
     [`${prefix}prefix <prefix>`, 'Change this server’s bot prefix.'],
@@ -545,6 +550,13 @@ const slashCommandSpecs = [
 ['modcheck','View staff moderation stats.',[U('staff','Staff member')]],
 ['embed','Create a custom embed.',[S('color','Hex colour, e.g. #5865F2',true),S('message','Embed text',true)]],
 ['panelbutton','Add a button to a panel.',[S('message_id','Panel message ID',true),S('label','Button label',true),S('destination','Channel ID or HTTPS URL',true)]],
+['button','Add a link or channel button to a bot message.',[S('message_id','Message ID',true),S('label','Button label',true),S('destination','Channel mention/ID or HTTPS URL',true)]],
+['priv','Get a random Roblox private server link.',[]],
+['birthday','Give a member birthday role and reactions for 24 hours.',[U('member','Member')]],
+['rbirthday','Remove birthday role and reactions.',[U('member','Member')]],
+['6777','Give the 6777 role and reaction for five minutes.',[U('member','Member')]],
+['poop','Give the Poop role and reaction for five minutes.',[U('member','Member')]],
+['reactset','Apply a custom reaction for a duration.',[U('member','Member'),S('emoji','Emoji',true),S('duration','Duration',true)]],
 ['webhook','Open Webhook Studio.',[]],
 ['role','Add or remove a role.',[A,U('member','Member'),R('role','Role')]],
 ['prefix','Change server prefix.',[S('prefix','New prefix',true)]],
@@ -585,7 +597,7 @@ const slashPermissionDefaults = {
   ticket: 'ManageGuild', multipleticket: 'ManageGuild',
   // Role-gated commands are hidden by default. Server admins must allow the exact roles
   // under Server Settings > Integrations > 3C Bot > Manage.
-  blehhh: '0', unblehhh: '0', '67': '0', checkuser: '0', modcheck: '0'
+  blehhh: '0', unblehhh: '0', '67': '0', birthday: '0', rbirthday: '0', '6777': '0', poop: '0', reactset: '0', checkuser: '0', modcheck: '0'
 };
 const slashCommands = slashCommandSpecs.map(([name,description,options]) => {
   const requiredPermission = slashPermissionDefaults[name];
@@ -624,7 +636,7 @@ async function dispatchSlashCommand(interaction) {
       optionParts.push(String(option.value));
     }
   }
-  const body = command === 'panelbutton' ? optionParts.join(' | ').trim() : optionParts.join(' ').trim();
+  const body = ['panelbutton','button'].includes(command) ? optionParts.join(' | ').trim() : optionParts.join(' ').trim();
   const content = prefix + command + (body ? ' ' + body : '');
   const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member) return interaction.editReply('❌ I could not load your server member record.');
@@ -1061,13 +1073,15 @@ async function handleCommandMessage(message) {
 
     // BLEHHH
     if (cmd === 'blehhh') {
-      if (message.member.roles.cache.has(BLEHHH_ROLE_ID)) {
+      const commandWait=cooldownSeconds(message.guild.id,message.author.id,'blehhh');
+      if(commandWait)return sendTemp(message.channel,'⏳ Wait '+commandWait+'s before using ?blehhh again.',4000);
+      if (message.member.roles.cache.has(BLEHHH_ROLE_ID) && !isAdministrator(message.member)) {
         return sendTemp(message.channel, '❌ Members with the **Blehhh** role cannot use this command.', 6000);
       }
 
       const freshInvoker = await message.guild.members.fetch(message.author.id).catch(() => message.member);
       const hasBoosterRole =
-        freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
+        isAdministrator(freshInvoker) || freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) ||
         freshInvoker.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
 
       if (!hasBoosterRole) {
@@ -1135,7 +1149,7 @@ async function handleCommandMessage(message) {
     // UNBLEHHH
     if (cmd === 'unblehhh') {
       const freshInvoker = await message.guild.members.fetch(message.author.id).catch(() => message.member);
-      const allowed = freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) || freshInvoker.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
+      const allowed = isAdministrator(freshInvoker) || freshInvoker.roles.cache.has(BLEHHH_BOOSTER_ROLE_ID) || freshInvoker.roles.cache.has(BLEHHH_BOOSTER_TOO_ROLE_ID);
       if (!allowed) return sendTemp(message.channel, '❌ Only Server Boosters or Boost toooo can use this command.', 6000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}unblehhh @user`, 6000);
       const role = message.guild.roles.cache.get(BLEHHH_ROLE_ID);
@@ -1796,7 +1810,7 @@ async function handleCommandMessage(message) {
       return;
     }
 
-    if (cmd === 'panelbutton') {
+    if (cmd === 'panelbutton' || cmd === 'button') {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
         return sendTemp(message.channel, 'You need Manage Messages to add panel buttons.', 6000);
       }
