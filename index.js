@@ -1891,8 +1891,16 @@ client.on('interactionCreate', async (interaction) => {
 
     if(interaction.isButton()&&interaction.customId==='webhook:list'){
       if(!canManageWebhooks())return interaction.reply({content:'❌ You need Manage Webhooks permission.',ephemeral:true});
-      const entries=Object.entries(savedWebhooks()).map(([savedId,w])=>({...w,id:String(w?.id||savedId)})).filter(w=>/^\\d{15,25}$/.test(w.id));
-      if(!entries.length)return interaction.reply({content:'No 3C Bot-managed webhooks have been saved in this server yet.',ephemeral:true});
+      const live=await interaction.guild.fetchWebhooks().catch(()=>null);
+      if(!live)return interaction.reply({content:'❌ I could not fetch this server’s webhooks. Check Manage Webhooks.',ephemeral:true});
+      if(!data.webhooks[interaction.guildId])data.webhooks[interaction.guildId]={};
+      for(const hook of live.values()){
+        const prior=data.webhooks[interaction.guildId][hook.id]||{};
+        data.webhooks[interaction.guildId][hook.id]={...prior,id:hook.id,name:hook.name,channelId:hook.channelId,createdBy:prior.createdBy||hook.owner?.id||null,token:prior.token||null};
+      }
+      saveData();
+      const entries=live.map(h=>({id:h.id,name:h.name,channelId:h.channelId}));
+      if(!entries.length)return interaction.reply({content:'No webhooks exist in this server yet.',ephemeral:true});
       const menu=new StringSelectMenuBuilder().setCustomId('webhook:select').setPlaceholder('Choose a webhook to manage').addOptions(entries.slice(0,25).map(w=>({label:String(w.name||'Webhook').slice(0,100),description:`Channel ${w.channelId||'unknown'}`.slice(0,100),value:w.id})));
       return interaction.reply({content:'Select a saved webhook:',components:[new ActionRowBuilder().addComponents(menu)],ephemeral:true});
     }
@@ -1902,13 +1910,14 @@ client.on('interactionCreate', async (interaction) => {
       const id=interaction.values[0],record=findSavedWebhook(id);
       if(!record)return interaction.reply({content:'❌ That saved webhook no longer exists.',ephemeral:true});
       const row=new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`webhook:compose:${id}`).setLabel('Compose / Resend').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`webhook:editmeta:${id}`).setLabel('Edit Webhook').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`webhook:compose:${id}`).setLabel('Compose / Resend').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`webhook:update:${id}`).setLabel('Update Last').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`webhook:buttons:${id}`).setLabel('Add Link Buttons').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`webhook:schedule:${id}`).setLabel('Schedule').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`webhook:delete:${id}`).setLabel('Delete').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId(`webhook:schedule:${id}`).setLabel('Schedule').setStyle(ButtonStyle.Secondary)
       );
-      return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}`,components:[row]});
+      const deleteRow=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`webhook:delete:${id}`).setLabel('Delete').setStyle(ButtonStyle.Danger));
+      return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}\n${record.token?'3C Bot can compose and edit messages.':'Existing webhook: settings can be edited; composing needs its original token.'}`,components:[row,deleteRow]});
     }
 
     if(interaction.isButton()&&interaction.customId.startsWith('webhook:editmeta:')){
