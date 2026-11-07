@@ -827,6 +827,7 @@ client.once('ready', async () => {
   await initializeMongoDB();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
+  await restoreTimedReactions().catch(err => console.error('Timed reaction recovery error:',err));
   await restoreWebhookSchedules().catch(err => console.error('Webhook schedule recovery error:',err));
   const registeredSlashCommands = await client.application.commands.set(slashCommands); console.log(`Registered ${registeredSlashCommands.size} global slash commands.`);
   client.user.setPresence({ activities: [{ name: '.. With Chriswizkid' }], status: 'online' });
@@ -835,6 +836,8 @@ client.once('ready', async () => {
 // React to every message from a member currently holding the Blehhh role.
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.author.bot) return;
+  const effects=(data.activeTimedReactions||{})[key(message.guild.id,message.author.id)]||[];
+  for(const effect of effects){if(effect.expiresAt>Date.now())await message.react(effect.emoji).catch(()=>{});}
   if (!message.member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
   const emoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
   if (emoji) await message.react(emoji).catch(() => {});
