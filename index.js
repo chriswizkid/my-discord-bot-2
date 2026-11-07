@@ -59,6 +59,7 @@ const defaultData = {
   staffStats: {},
   staffCases: {},
   active67: {},
+  activeTimedReactions: {},
   emergencyCleanup: {},
   webhooks: {},
   webhookSchedules: [],
@@ -131,7 +132,36 @@ function isLevel30Member(member) {
 
 function isStaffMember(member) {
   if (!member) return false;
-  return member.roles?.cache?.has(STAFF_ROLE_ID) || false;
+  return Boolean(member.permissions?.has(PermissionsBitField.Flags.Administrator) || member.roles?.cache?.has(STAFF_ROLE_ID));
+}
+function isAdministrator(member) { return Boolean(member?.permissions?.has(PermissionsBitField.Flags.Administrator)); }
+function hasAnyRoleOrAdmin(member, roleIds) { return isAdministrator(member) || roleIds.some(id => member?.roles?.cache?.has(id)); }
+function cooldownSeconds(guildId,userId,command,ms=30000) {
+  const k=guildId+':'+userId+':'+command,now=Date.now(),until=commandCooldowns.get(k)||0;
+  if(until>now)return Math.ceil((until-now)/1000);
+  commandCooldowns.set(k,now+ms);
+  setTimeout(()=>{if((commandCooldowns.get(k)||0)<=Date.now())commandCooldowns.delete(k);},ms+250);
+  return 0;
+}
+function scheduleTimedReaction(guild,userId,effect) {
+  const k=key(guild.id,userId),list=data.activeTimedReactions[k]||[];
+  const old=list.find(x=>x.kind===effect.kind);if(old)Object.assign(old,effect);else list.push(effect);
+  data.activeTimedReactions[k]=list;saveData();
+  const timerKey=k+':'+effect.kind,previous=timedReactionTimers.get(timerKey);if(previous)clearTimeout(previous);
+  timedReactionTimers.set(timerKey,setTimeout(()=>expireTimedReaction(guild,userId,effect.kind).catch(console.error),Math.max(0,effect.expiresAt-Date.now())));
+}
+async function expireTimedReaction(guild,userId,kind) {
+  const k=key(guild.id,userId),list=data.activeTimedReactions[k]||[],effect=list.find(x=>x.kind===kind);if(!effect)return;
+  const member=await guild.members.fetch(userId).catch(()=>null);
+  if(member&&effect.roleId&&member.roles.cache.has(effect.roleId))await member.roles.remove(effect.roleId,kind+' effect expired').catch(()=>{});
+  const next=list.filter(x=>x.kind!==kind);if(next.length)data.activeTimedReactions[k]=next;else delete data.activeTimedReactions[k];
+  timedReactionTimers.delete(k+':'+kind);saveData();
+}
+async function restoreTimedReactions() {
+  for(const [k,list] of Object.entries(data.activeTimedReactions||{})){
+    const parts=k.split(':'),guild=client.guilds.cache.get(parts[0]);if(!guild)continue;
+    for(const effect of list||[]){if(effect.expiresAt<=Date.now())await expireTimedReaction(guild,parts[1],effect.kind);else{const timerKey=k+':'+effect.kind;timedReactionTimers.set(timerKey,setTimeout(()=>expireTimedReaction(guild,parts[1],effect.kind).catch(()=>{}),Math.max(0,effect.expiresAt-Date.now())));}}
+  }
 }
 
 function staffStatsFor(guildId, userId) {
@@ -176,6 +206,8 @@ const tempMuteTimers = new Map();
 const blehhhCooldowns = new Map();
 const blehhhTimers = new Map();
 const active67Timers = new Map();
+const timedReactionTimers = new Map();
+const commandCooldowns = new Map();
 const webhookScheduleTimers = new Map();
 const reportCooldowns = new Map();
 const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
