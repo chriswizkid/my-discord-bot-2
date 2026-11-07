@@ -1880,7 +1880,8 @@ async function handleCommandMessage(message) {
       if(!message.guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles))return sendTemp(message.channel,'❌ I need Manage Roles.',5000);
       const role=message.guild.roles.cache.get(roleId);if(!role)return sendTemp(message.channel,'❌ Birthday role not found.',5000);
       await target.roles.add(role,'Birthday effect by '+message.author.tag);
-      scheduleTimedReaction(message.guild,target.id,{kind:'birthday',emoji:'🎂',roleId:roleId,expiresAt:Date.now()+86400000});
+      const birthdayEmoji=message.guild.emojis.cache.find(e=>e.name.toLowerCase()==='birthday_cake')||'🎂';
+      scheduleTimedReaction(message.guild,target.id,{kind:'birthday',emoji:String(birthdayEmoji),roleId:roleId,expiresAt:Date.now()+86400000});
       return sendTemp(message.channel,'🎂 '+target+' has the birthday role and reactions for 24 hours.',5000);
     }
 
