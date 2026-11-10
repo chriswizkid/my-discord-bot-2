@@ -904,7 +904,7 @@ async function handleCommandMessage(message) {
     const activity = staffStatsFor(message.guild.id, message.author.id);
     activity.messages = (activity.messages || 0) + 1;
     activity.lastSeen = Date.now();
-    const isBotCommand = message.content.startsWith(getPrefix(message.guild.id));
+    const isBotCommand = message.content.startsWith(getPrefix(message.guild.id)) || new RegExp('^<@!?' + client.user.id + '>\\s*\\S').test(message.content);
     if (isBotCommand) {
       activity.commands = (activity.commands || 0) + 1;
       activity.lastCommand = Date.now();
@@ -922,7 +922,11 @@ async function handleCommandMessage(message) {
     });
   }
 
-  const prefix = getPrefix(message.guild.id);
+  const configuredPrefix = getPrefix(message.guild.id);
+  const botMentionMatch = message.content.match(new RegExp('^<@!?' + client.user.id + '>\\s*'));
+  const usedMentionPrefix = Boolean(botMentionMatch);
+  const prefix = usedMentionPrefix ? '<@' + client.user.id + '> ' : configuredPrefix;
+  const commandPrefixLength = usedMentionPrefix ? botMentionMatch[0].length : configuredPrefix.length;
 
   // Mention an AFK member.
   for (const user of message.mentions.users.values()) {
@@ -941,8 +945,8 @@ async function handleCommandMessage(message) {
     await sendTemp(message.channel, `👋 Welcome back, ${message.author}! You were AFK for **${prettyDuration(Date.now() - myAfk.since)}**${myAfk.reason ? ` — ${myAfk.reason}` : ''}.`, 8000);
   }
 
-  if (!message.content.startsWith(prefix)) return;
-  const body = message.content.slice(prefix.length).trim();
+  if (!usedMentionPrefix && !message.content.startsWith(configuredPrefix)) return;
+  const body = message.content.slice(commandPrefixLength).trim();
   if (!body) return;
   const args = tokenize(body);
   const cmd = args.shift().toLowerCase();
@@ -1055,7 +1059,7 @@ async function handleCommandMessage(message) {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageMessages)) return sendTemp(message.channel, '❌ You need **Manage Messages** permission to use whisper.', 5000);
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}whisper @user <message>`, 5000);
       if (target.id === message.author.id || target.user.bot) return sendTemp(message.channel, '❌ You cannot whisper to yourself or a bot.', 5000);
-      const rawWhisper = message.content.slice(prefix.length + cmd.length).trim();
+      const rawWhisper = message.content.slice(commandPrefixLength + cmd.length).trim();
       const mentionText = message.mentions.users.first()?.toString() || '';
       const whisperText = rawWhisper.replace(mentionText, '').trim();
       if (!whisperText) return sendTemp(message.channel, `Usage: ${prefix}whisper @user <message>`, 5000);
