@@ -939,7 +939,7 @@ async function handleCommandMessage(message) {
   // Coming back from AFK.
   const myAfkKey = key(message.guild.id, message.author.id);
   const myAfk = afk.get(myAfkKey);
-  const isAfkCommand = message.content.trim().toLowerCase().startsWith(`${prefix}afk`);
+  const isAfkCommand = message.content.slice(commandPrefixLength).trim().toLowerCase().startsWith('afk');
   if (myAfk && !isAfkCommand) {
     afk.delete(myAfkKey);
     await sendTemp(message.channel, `👋 Welcome back, ${message.author}! You were AFK for **${prettyDuration(Date.now() - myAfk.since)}**${myAfk.reason ? ` — ${myAfk.reason}` : ''}.`, 8000);
