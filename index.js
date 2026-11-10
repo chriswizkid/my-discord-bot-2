@@ -217,7 +217,7 @@ const BLEHHH_COOLDOWN_MS = 30 * 1000;
 const BLEHHH_MIN_MS = 10 * 1000;
 const BLEHHH_MAX_MS = 30 * 60 * 1000;
 
-function getPrefix(guildId) { return data.prefixes[guildId] || '!'; }
+function getPrefix(guildId) { return Object.prototype.hasOwnProperty.call(data.prefixes, guildId) ? data.prefixes[guildId] : '!'; }
 function key(guildId, userId) { return `${guildId}:${userId}`; }
 function cleanReason(parts) { return parts.join(' ').trim(); }
 function tokenize(text) {
@@ -637,7 +637,7 @@ async function dispatchSlashCommand(interaction) {
     }
   }
   const body = ['panelbutton','button'].includes(command) ? optionParts.join(' | ').trim() : optionParts.join(' ').trim();
-  const content = prefix + command + (body ? ' ' + body : '');
+  const content = (prefix ? prefix : '<@' + interaction.client.user.id + '> ') + command + (body ? ' ' + body : '');
   const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member) return interaction.editReply('❌ I could not load your server member record.');
   const userIds = [...content.matchAll(/<@!?(\d{15,25})>/g)].map(m => m[1]);
@@ -945,7 +945,7 @@ async function handleCommandMessage(message) {
     await sendTemp(message.channel, `👋 Welcome back, ${message.author}! You were AFK for **${prettyDuration(Date.now() - myAfk.since)}**${myAfk.reason ? ` — ${myAfk.reason}` : ''}.`, 8000);
   }
 
-  if (!usedMentionPrefix && !message.content.startsWith(configuredPrefix)) return;
+  if (!usedMentionPrefix && (!configuredPrefix || !message.content.startsWith(configuredPrefix))) return;
   const body = message.content.slice(commandPrefixLength).trim();
   if (!body) return;
   const args = tokenize(body);
@@ -1394,8 +1394,13 @@ async function handleCommandMessage(message) {
     // PREFIX
     if (cmd === 'prefix') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
-      if (!args[0]) return sendTemp(message.channel, `Current prefix: \`${prefix}\``, 5000);
-      if (args[0].length > 5 || /\s/.test(args[0])) return sendTemp(message.channel, '❌ Prefix must be 1–5 characters with no spaces.', 5000);
+      if (!args[0]) return sendTemp(message.channel, `Current prefix: ${prefix ? '`' + prefix + '`' : '**nothing (mention or slash commands only)**'}`, 5000);
+      if (/^(nothing|none|off)$/i.test(args[0])) {
+        data.prefixes[message.guild.id] = '';
+        saveData();
+        return sendTemp(message.channel, '✅ Prefix disabled. Use **@3C command** or slash commands from now on.', 7000);
+      }
+      if (args[0].length > 5 || /\s/.test(args[0])) return sendTemp(message.channel, '❌ Prefix must be 1–5 characters with no spaces, or use `nothing` to disable it.', 5000);
       data.prefixes[message.guild.id] = args[0]; saveData();
       return sendTemp(message.channel, `✅ Prefix changed to \`${args[0]}\`.`, 6000);
     }
