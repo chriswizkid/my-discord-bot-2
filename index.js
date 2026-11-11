@@ -941,6 +941,72 @@ client.on('inviteDelete', invite => {
   if (snapshot) snapshot.delete(invite.code);
 });
 
+async function createWelcomeCard(member, memberCount) {
+  const { createCanvas, loadImage } = require('@napi-rs/canvas');
+  const width = 1200;
+  const height = 407;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  const bgPath = path.join(__dirname, 'assets', '3c-welcome-bg.jpg.b64');
+  const bgBuffer = Buffer.from(fs.readFileSync(bgPath, 'utf8').trim(), 'base64');
+  const background = await loadImage(bgBuffer);
+  ctx.drawImage(background, 0, 0, width, height);
+
+  // Darken the image slightly so the white welcome text stays readable.
+  const shade = ctx.createLinearGradient(0, 0, width, 0);
+  shade.addColorStop(0, 'rgba(5, 8, 18, 0.12)');
+  shade.addColorStop(0.42, 'rgba(5, 8, 18, 0.48)');
+  shade.addColorStop(1, 'rgba(5, 8, 18, 0.18)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(0, 0, width, height);
+
+  // Rounded outer frame.
+  ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(3, 3, width - 6, height - 6, 18);
+  ctx.stroke();
+
+  // Member avatar.
+  const avatarUrl = member.displayAvatarURL({ extension: 'png', size: 256 });
+  const avatar = await loadImage(avatarUrl);
+  const avatarX = 185;
+  const avatarY = 203;
+  const radius = 91;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(avatarX, avatarY, radius, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(avatar, avatarX - radius, avatarY - radius, radius * 2, radius * 2);
+  ctx.restore();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.arc(avatarX, avatarY, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const displayName = member.displayName || member.user.username;
+  const welcomeText = 'Welcome, ' + displayName + '!';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#ffffff';
+  let fontSize = 56;
+  ctx.font = '600 ' + fontSize + 'px sans-serif';
+  while (ctx.measureText(welcomeText).width > 850 && fontSize > 30) {
+    fontSize -= 2;
+    ctx.font = '600 ' + fontSize + 'px sans-serif';
+  }
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 2;
+  ctx.fillText(welcomeText, 340, 196, 840);
+  ctx.font = '30px sans-serif';
+  ctx.fillText('You are the ' + memberCount + ordinalSuffix(memberCount) + ' member!', 342, 244, 830);
+  ctx.shadowColor = 'transparent';
+  return canvas.toBuffer('image/png');
+}
+
 client.on('guildMemberAdd', async member => {
   const guild = member.guild;
   const oldSnapshot = inviteSnapshots.get(guild.id) || new Map();
@@ -966,7 +1032,13 @@ client.on('guildMemberAdd', async member => {
     const inviterText = inviterId ? '<@' + inviterId + '>' : 'an unknown invite';
     const count = inviterId ? Object.values(guildRecords).filter(x => x.inviterId === inviterId && !x.leftAt && !x.isBot && !x.suspicious).length : 0;
     await welcomeChannel.send({ content: '**' + member.toString() + '** has been invited by **' + inviterText + '** and has now ' + count + ' invites.', allowedMentions: { users: [member.id, ...(inviterId ? [inviterId] : [])] } }).catch(() => {});
-    await welcomeChannel.send({ content: 'Welcome, ' + member.toString() + '! You are the ' + guild.memberCount + ordinalSuffix(guild.memberCount) + ' member!', allowedMentions: { users: [member.id] } }).catch(() => {});
+    try {
+      const card = await createWelcomeCard(member, guild.memberCount);
+      await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3c-welcome.png' })] });
+    } catch (error) {
+      console.error('Welcome card render failed:', error);
+      await welcomeChannel.send({ content: 'Welcome, ' + member.toString() + '! You are the ' + guild.memberCount + ordinalSuffix(guild.memberCount) + ' member!', allowedMentions: { users: [member.id] } }).catch(() => {});
+    }
   }
 });
 
