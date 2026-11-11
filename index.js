@@ -954,9 +954,9 @@ client.on('guildMemberAdd', async member => {
   const guildRecords = data.inviteHistory[guild.id] || (data.inviteHistory[guild.id] = {});
   const recentKey = guild.id + ':' + (inviterId || 'unknown');
   const recent = (recentInviterJoins.get(recentKey) || []).filter(t => Date.now() - t < 10 * 60 * 1000);
-  recent.push(Date.now());
-  recentInviterJoins.set(recentKey, recent);
   const accountAge = Date.now() - member.user.createdTimestamp;
+  if (accountAge < 7 * 86400000) recent.push(Date.now());
+  recentInviterJoins.set(recentKey, recent);
   const suspicious = Boolean(inviterId && accountAge < 7 * 86400000 && recent.length >= 3);
   guildRecords[member.id] = { memberId: member.id, inviterId, joinedAt: Date.now(), leftAt: null, isBot: member.user.bot, suspicious };
   saveData();
