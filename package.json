@@ -13,6 +13,6 @@
     "discord.js": "^14.24.2",
     "dotenv": "^16.6.1",
     "mongodb": "^6.20.0",
-    "@napi-rs/canvas": "^0.1.80"
+    "jimp": "^0.22.12"
   }
 }
