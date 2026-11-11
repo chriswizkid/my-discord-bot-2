@@ -1007,7 +1007,9 @@ async function createWelcomeCard(member, memberCount) {
 }
 
 client.on('guildMemberAdd', async member => {
+  const eventStartedAt = Date.now();
   const guild = member.guild;
+  console.log('[WELCOME] MEMBER_ADD event received guild=' + guild.id + ' member=' + member.id);
   const oldSnapshot = inviteSnapshots.get(guild.id) || new Map();
   const invites = await guild.invites.fetch().catch(() => null);
   let inviterId = null;
@@ -1030,16 +1032,30 @@ client.on('guildMemberAdd', async member => {
     console.error('Could not fetch configured welcome channel:', err);
     return null;
   }) : null;
+  console.log('[WELCOME] configuredChannel=' + (welcomeChannelId || 'NONE') + ' fetched=' + Boolean(welcomeChannel) + ' textBased=' + Boolean(welcomeChannel?.isTextBased()));
   if (welcomeChannel?.isTextBased()) {
     const inviterText = inviterId ? '<@' + inviterId + '>' : 'an unknown invite';
     const count = inviterId ? Object.values(guildRecords).filter(x => x.inviterId === inviterId && !x.leftAt && !x.isBot && !x.suspicious).length : 0;
-    await welcomeChannel.send({ content: '**' + member.toString() + '** has been invited by **' + inviterText + '** and has now ' + count + ' invites.', allowedMentions: { users: [member.id, ...(inviterId ? [inviterId] : [])] } }).catch(() => {});
     try {
+      await welcomeChannel.send({ content: '**' + member.toString() + '** has been invited by **' + inviterText + '** and has now ' + count + ' invites.', allowedMentions: { users: [member.id, ...(inviterId ? [inviterId] : [])] } });
+      console.log('[WELCOME] INVITE_MESSAGE_SENT');
+    } catch (sendError) {
+      console.error('[WELCOME] INVITE_MESSAGE_FAILED:', sendError);
+    }
+    try {
+      console.log('[WELCOME] CARD_RENDER_START');
       const card = await createWelcomeCard(member, guild.memberCount);
-      await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3c-welcome.jpg' })] });
+      console.log('[WELCOME] CARD_RENDERED bytes=' + card.length);
+      console.log('[WELCOME] CARD_UPLOAD_START');
+      const sentMessage = await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3c-welcome.jpg', description: 'Welcome to 3C' })] });
+      console.log('[WELCOME] CARD_UPLOAD_SUCCESS message=' + sentMessage.id + ' durationMs=' + (Date.now() - eventStartedAt));
     } catch (error) {
-      console.error('Welcome card render failed:', error && error.stack ? error.stack : error);
-      await welcomeChannel.send({ content: '⚠️ The welcome card could not be rendered. Check the bot logs for the exact error.' }).catch(() => {});
+      console.error('[WELCOME] CARD_FAILED:', error && error.stack ? error.stack : error);
+      try {
+        await welcomeChannel.send({ content: '⚠️ Welcome card failed: ' + String(error.message || error).slice(0, 300) });
+      } catch (warningError) {
+        console.error('[WELCOME] WARNING_SEND_FAILED:', warningError);
+      }
     }
   }
 });
