@@ -520,6 +520,14 @@ const TOD_API_ENDPOINTS = {
 };
 
 // Only request PG prompts and reject obviously unsafe prompts before displaying them.
+let todApiNextRequestAt = 0;
+async function waitForTodApiSlot() {
+  const now = Date.now();
+  const wait = Math.max(0, todApiNextRequestAt - now);
+  todApiNextRequestAt = Math.max(now, todApiNextRequestAt) + 1100;
+  if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+}
+
 const TOD_UNSAFE_PROMPT = /\b(?:self[- ]?harm|suicid\w*|cut yourself|hurt yourself|drink alcohol|consume alcohol|smok(?:e|ing)|vape|marijuana|cannabis|weed|drug\w*|pills|take medication|strangl\w*|chok\w*|hold your breath|jump from|climb (?:a|the)|run into (?:the )?road|traffic|moving vehicle|fight someone|hit someone|punch someone|weapon|knife|firearm|nude|undress|sexual|sexually|genitals|send (?:a )?(?:nude|private) photo)\b/i;
 
 async function fetchTodPrompt(kind) {
@@ -528,6 +536,7 @@ async function fetchTodPrompt(kind) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      await waitForTodApiSlot();
       const url = endpoint + '?rating=pg';
       const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
       if (!response.ok) throw new Error('Question API returned HTTP ' + response.status);
