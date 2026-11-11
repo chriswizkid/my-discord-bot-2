@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const {
   Client,
+  AttachmentBuilder,
   GatewayIntentBits,
   Partials,
   PermissionsBitField,
