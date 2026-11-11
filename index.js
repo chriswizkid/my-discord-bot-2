@@ -961,41 +961,44 @@ async function createWelcomeCard(member, memberCount) {
     const avatarUrl = member.user.displayAvatarURL({ extension: 'png', forceStatic: true, size: 128 });
     const response = await fetch(avatarUrl, { headers: { 'User-Agent': '3C-Bot/1.0' } });
     if (!response.ok) throw new Error('Avatar request returned HTTP ' + response.status);
-    avatarBuffer = await sharp(Buffer.from(await response.arrayBuffer()))
-      .resize(184, 184, { fit: 'cover' })
-      .composite([{ input: Buffer.from('<svg width="184" height="184"><circle cx="92" cy="92" r="92" fill="white"/></svg>'), blend: 'dest-in' }])
-      .png().toBuffer();
+    avatarBuffer = Buffer.from(await response.arrayBuffer());
   } catch (error) {
-    console.warn('[WELCOME] Avatar fetch/decode failed; using default avatar:', error.message);
-    const fallback = member.user.defaultAvatarURL;
-    const response = await fetch(fallback);
+    console.warn('[WELCOME] Avatar fetch failed; using default avatar:', error.message);
+    const response = await fetch(member.user.defaultAvatarURL);
     if (!response.ok) throw new Error('Could not fetch fallback avatar');
-    avatarBuffer = await sharp(Buffer.from(await response.arrayBuffer()))
-      .resize(184, 184, { fit: 'cover' })
-      .composite([{ input: Buffer.from('<svg width="184" height="184"><circle cx="92" cy="92" r="92" fill="white"/></svg>'), blend: 'dest-in' }])
-      .png().toBuffer();
+    avatarBuffer = Buffer.from(await response.arrayBuffer());
   }
 
+  const avatarCircle = await sharp(avatarBuffer)
+    .resize(184, 184, { fit: 'cover' })
+    .composite([{
+      input: Buffer.from('<svg width="184" height="184"><circle cx="92" cy="92" r="92" fill="white"/></svg>'),
+      blend: 'dest-in'
+    }])
+    .png().toBuffer();
+
+  const escapeXml = value => String(value).replace(/[&<>"']/g, ch =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch]));
   const displayName = String(member.displayName || member.user.username)
-    .replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch]))
     .replace(/\s+/g, ' ').slice(0, 48);
-  const welcomeText = 'Welcome, ' + displayName + '!';
-  const memberLine = 'You are the ' + memberCount + ordinalSuffix(memberCount) + ' member!';
+  const welcomeText = escapeXml('Welcome, ' + displayName + '!');
+  const memberLine = escapeXml('You are the ' + memberCount + ordinalSuffix(memberCount) + ' member!');
+  const availableWidth = 835;
+  const estimatedTextWidth = ('Welcome, ' + displayName + '!').length * 0.56;
+  const welcomeFontSize = Math.max(34, Math.min(64, Math.floor(availableWidth / estimatedTextWidth)));
   const overlay = Buffer.from(`<svg width="1200" height="407" xmlns="http://www.w3.org/2000/svg">
-    <defs><clipPath id="avatarClip"><circle cx="174" cy="195" r="92"/></clipPath></defs>
-    <circle cx="174" cy="195" r="102" fill="none" stroke="#fff" stroke-width="20"/>
     <g fill="#000" opacity=".72" font-family="Arial,sans-serif">
-      <text x="263" y="178" font-size="64">${welcomeText}</text>
-      <text x="263" y="268" font-size="32">${memberLine}</text>
+      <text x="313" y="181" font-size="${welcomeFontSize}">${welcomeText}</text>
+      <text x="313" y="259" font-size="32">${memberLine}</text>
     </g>
     <g fill="#fff" font-family="Arial,sans-serif">
-      <text x="260" y="175" font-size="64">${welcomeText}</text>
-      <text x="260" y="265" font-size="32">${memberLine}</text>
+      <text x="310" y="178" font-size="${welcomeFontSize}">${welcomeText}</text>
+      <text x="310" y="256" font-size="32">${memberLine}</text>
     </g>
   </svg>`);
   return sharp(background)
     .composite([
-      { input: avatarBuffer, left: 82, top: 103 },
+      { input: avatarCircle, left: 82, top: 111 },
       { input: overlay, left: 0, top: 0 }
     ])
     .jpeg({ quality: 88, mozjpeg: true }).toBuffer();
