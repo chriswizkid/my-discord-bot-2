@@ -943,7 +943,6 @@ client.on('inviteDelete', invite => {
 });
 
 async function createWelcomeCard(member, memberCount) {
-  // Pure-JavaScript Jimp renderer: avoids native Canvas binaries that crash on some hosts.
   const Jimp = require('jimp');
   const width = 1200;
   const height = 407;
@@ -951,57 +950,42 @@ async function createWelcomeCard(member, memberCount) {
   const bgBuffer = Buffer.from(fs.readFileSync(bgPath, 'utf8').trim(), 'base64');
   const image = await Jimp.read(bgBuffer);
   image.resize(width, height);
-
-  // Slightly darken the background to keep the text readable.
   image.scan(0, 0, width, height, function (x, y, idx) {
-    this.bitmap.data[idx] = Math.round(this.bitmap.data[idx] * 0.68);
-    this.bitmap.data[idx + 1] = Math.round(this.bitmap.data[idx + 1] * 0.68);
-    this.bitmap.data[idx + 2] = Math.round(this.bitmap.data[idx + 2] * 0.68);
+    this.bitmap.data[idx] = Math.round(this.bitmap.data[idx] * 0.62);
+    this.bitmap.data[idx + 1] = Math.round(this.bitmap.data[idx + 1] * 0.62);
+    this.bitmap.data[idx + 2] = Math.round(this.bitmap.data[idx + 2] * 0.62);
   });
 
-  // White rounded text panel, drawn without native graphics dependencies.
-  const panel = new Jimp(width, height, 0x00000000);
-  const px = 360, py = 103, pw = 790, ph = 201, radius = 34;
-  panel.scan(px, py, pw, ph, function (x, y, idx) {
-    const cx = x < px + radius ? px + radius : (x >= px + pw - radius ? px + pw - radius - 1 : x);
-    const cy = y < py + radius ? py + radius : (y >= py + ph - radius ? py + ph - radius - 1 : y);
-    const dx = x - cx, dy = y - cy;
-    if (dx * dx + dy * dy <= radius * radius) {
-      this.bitmap.data[idx] = 255;
-      this.bitmap.data[idx + 1] = 255;
-      this.bitmap.data[idx + 2] = 255;
-      this.bitmap.data[idx + 3] = 246;
-    }
-  });
-  image.composite(panel, 0, 0);
-
-  // Avatar with a clean white circular border.
   const avatarUrl = member.displayAvatarURL({ extension: 'png', size: 256 });
   const avatarResponse = await fetch(avatarUrl);
   if (!avatarResponse.ok) throw new Error('Could not download member avatar: HTTP ' + avatarResponse.status);
   const avatar = await Jimp.read(Buffer.from(await avatarResponse.arrayBuffer()));
-  avatar.resize(184, 184);
-  const avatarX = 92, avatarY = 111, avatarSize = 200;
-  const border = new Jimp(avatarSize, avatarSize, 0xFFFFFFFF);
-  const avatarCircle = new Jimp(184, 184, 0x00000000);
+  avatar.cover(184, 184);
+  const avatarX = 82, avatarY = 103;
   avatar.scan(0, 0, 184, 184, function (x, y, idx) {
     const dx = x - 91.5, dy = y - 91.5;
     if (dx * dx + dy * dy > 91.5 * 91.5) this.bitmap.data[idx + 3] = 0;
   });
-  avatarCircle.composite(avatar, 0, 0);
-  image.composite(border, avatarX, avatarY);
-  image.composite(avatarCircle, avatarX + 8, avatarY + 8);
+  const ring = new Jimp(204, 204, 0xFFFFFFFF);
+  const circle = new Jimp(184, 184, 0x00000000);
+  circle.composite(avatar, 0, 0);
+  image.composite(ring, avatarX - 10, avatarY - 10);
+  image.composite(circle, avatarX, avatarY);
 
   const displayName = String(member.displayName || member.user.username).replace(/\s+/g, ' ').slice(0, 48);
-  const font64 = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-  const font32 = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
+  const font64 = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+  const font32 = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
+  const shadow64 = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+  const shadow32 = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
   let welcomeText = 'Welcome, ' + displayName + '!';
-  while (Jimp.measureText(font64, welcomeText) > 720 && welcomeText.length > 18) {
+  while (Jimp.measureText(font64, welcomeText) > 850 && welcomeText.length > 18) {
     welcomeText = welcomeText.slice(0, -2) + '…!';
   }
-  image.print(font64, 405, 143, { text: welcomeText, alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT, alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE }, 720, 78);
   const memberLine = 'You are the ' + memberCount + ordinalSuffix(memberCount) + ' member!';
-  image.print(font32, 407, 220, { text: memberLine, alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT, alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE }, 710, 48);
+  image.print(shadow64, 263, 128, welcomeText);
+  image.print(font64, 260, 125, welcomeText);
+  image.print(shadow32, 263, 218, memberLine);
+  image.print(font32, 260, 215, memberLine);
   return await image.getBufferAsync(Jimp.MIME_JPEG);
 }
 
@@ -1025,7 +1009,10 @@ client.on('guildMemberAdd', async member => {
   guildRecords[member.id] = { memberId: member.id, inviterId, joinedAt: Date.now(), leftAt: null, isBot: member.user.bot, suspicious };
   saveData();
   const welcomeChannelId = data.welcomeChannels[guild.id];
-  const welcomeChannel = welcomeChannelId ? guild.channels.cache.get(welcomeChannelId) : null;
+  const welcomeChannel = welcomeChannelId ? await guild.channels.fetch(welcomeChannelId).catch(err => {
+    console.error('Could not fetch configured welcome channel:', err);
+    return null;
+  }) : null;
   if (welcomeChannel?.isTextBased()) {
     const inviterText = inviterId ? '<@' + inviterId + '>' : 'an unknown invite';
     const count = inviterId ? Object.values(guildRecords).filter(x => x.inviterId === inviterId && !x.leftAt && !x.isBot && !x.suspicious).length : 0;
@@ -1035,7 +1022,6 @@ client.on('guildMemberAdd', async member => {
       await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3c-welcome.jpg' })] });
     } catch (error) {
       console.error('Welcome card render failed:', error);
-      await welcomeChannel.send({ content: 'Welcome, ' + member.toString() + '! You are the ' + guild.memberCount + ordinalSuffix(guild.memberCount) + ' member!', allowedMentions: { users: [member.id] } }).catch(() => {});
     }
   }
 });
