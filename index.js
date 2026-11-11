@@ -470,6 +470,8 @@ function commandList(prefix) {
     [`${prefix}modcheck @staff`, 'Staff-only dashboard showing tracked moderation actions issued by a staff member.'],
     [`${prefix}embed #HEX <message>`, 'Send multiline text, Markdown and mentions inside a custom-color embed; attach a photo to include it.'],
     [`${prefix}panelbutton / button <messageID> | label | #channel or URL`, 'Add a link or channel button to a bot message.'],
+    [`${prefix}truth / dare / tod`, 'Get a Truth, Dare, or random Truth-or-Dare prompt.'],
+    [`${prefix}wyr / nhie / random`, 'Play Would You Rather, Never Have I Ever, or get a random game prompt.'],
     [`${prefix}priv`, 'Send a random Roblox private-server link.'],
     [`${prefix}birthday @user / rbirthday @user`, 'Give or remove the 24-hour birthday effect (staff).'],
     [`${prefix}6777 @user`, 'Give the 6777 role and reaction for five minutes (Level 67).'],
@@ -508,6 +510,65 @@ function commandList(prefix) {
     [`${prefix}setupaudit #channel`, 'Connect 3C audit logs to an existing channel; never creates a new channel.'],
     [`${prefix}commands`, 'Show the full command list.'],
   ];
+}
+
+const TOD_API_ENDPOINTS = {
+  truth: 'https://api.truthordarebot.xyz/v1/truth',
+  dare: 'https://api.truthordarebot.xyz/api/dare',
+  wyr: 'https://api.truthordarebot.xyz/api/wyr',
+  nhie: 'https://api.truthordarebot.xyz/api/nhie'
+};
+
+// Only request PG prompts and reject obviously unsafe prompts before displaying them.
+const TOD_UNSAFE_PROMPT = /\b(?:self[- ]?harm|suicid\w*|cut yourself|hurt yourself|drink alcohol|consume alcohol|smok(?:e|ing)|vape|marijuana|cannabis|weed|drug\w*|pills|take medication|strangl\w*|chok\w*|hold your breath|jump from|climb (?:a|the)|run into (?:the )?road|traffic|moving vehicle|fight someone|hit someone|punch someone|weapon|knife|firearm|nude|undress|sexual|sexually|genitals|send (?:a )?(?:nude|private) photo)\b/i;
+
+async function fetchTodPrompt(kind) {
+  const endpoint = TOD_API_ENDPOINTS[kind];
+  if (!endpoint) throw new Error('Unknown game type');
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const url = endpoint + '?rating=pg';
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
+      if (!response.ok) throw new Error('Question API returned HTTP ' + response.status);
+      const payload = await response.json();
+      if (!payload || typeof payload.question !== 'string' || !payload.question.trim()) {
+        throw new Error('Question API returned an invalid response');
+      }
+      const rating = String(payload.rating || '').toUpperCase();
+      if (rating && rating !== 'PG') throw new Error('Question API returned a non-PG prompt');
+      if (TOD_UNSAFE_PROMPT.test(payload.question)) continue;
+      return { question: payload.question.trim(), rating: 'PG', type: String(payload.type || kind).toUpperCase() };
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2) break;
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error('Could not find a suitable prompt');
+}
+
+async function sendTodPrompt(message, kind) {
+  const wait = cooldownSeconds(message.guild.id, message.author.id, 'tod:' + kind, 5000);
+  if (wait) return sendTemp(message.channel, '⏳ Please wait ' + wait + 's before requesting another game prompt.', 4000);
+  try {
+    let selected = kind;
+    if (kind === 'tod') selected = Math.random() < 0.5 ? 'truth' : 'dare';
+    if (kind === 'random') selected = ['truth', 'dare', 'wyr', 'nhie'][Math.floor(Math.random() * 4)];
+    const result = await fetchTodPrompt(selected);
+    const titles = { truth: 'Truth', dare: 'Dare', wyr: 'Would You Rather', nhie: 'Never Have I Ever' };
+    const embed = new EmbedBuilder()
+      .setColor(0x9B59FF)
+      .setAuthor({ name: message.member?.displayName || message.author.username, iconURL: message.author.displayAvatarURL({ size: 128 }) })
+      .setTitle(titles[selected] || '3C Game')
+      .setDescription(result.question)
+      .setFooter({ text: 'Rating: PG • Question source: Truth or Dare API • 3C Bot' })
+      .setTimestamp();
+    return await message.channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+  } catch (error) {
+    console.error('3C Truth or Dare API error:', error);
+    return sendTemp(message.channel, '❌ I could not get a suitable question right now. Please try again in a moment.', 5000);
+  }
 }
 
 function buildCommandsPayload(prefix, requestedPage = 0) {
@@ -551,6 +612,12 @@ const slashCommandSpecs = [
 ['embed','Create a custom embed.',[S('color','Hex colour, e.g. #5865F2',true),S('message','Embed text',true)]],
 ['panelbutton','Add a button to a panel.',[S('message_id','Panel message ID',true),S('label','Button label',true),S('destination','Channel ID or HTTPS URL',true)]],
 ['button','Add a link or channel button to a bot message.',[S('message_id','Message ID',true),S('label','Button label',true),S('destination','Channel mention/ID or HTTPS URL',true)]],
+['truth','Get a random truth prompt.',[]],
+['dare','Get a random dare prompt.',[]],
+['tod','Get a random truth or dare prompt.',[]],
+['wyr','Get a Would You Rather prompt.',[]],
+['nhie','Get a Never Have I Ever prompt.',[]],
+['random','Get a random game prompt.',[]],
 ['priv','Get a random Roblox private server link.',[]],
 ['birthday','Give a member birthday role and reactions for 24 hours.',[U('member','Member')]],
 ['rbirthday','Remove birthday role and reactions.',[U('member','Member')]],
@@ -1863,6 +1930,10 @@ async function handleCommandMessage(message) {
       return sendTemp(message.channel, `Added button: ${label.slice(0, 80)}`, 5000);
     }
 
+
+    if (['truth','dare','tod','wyr','nhie','random'].includes(cmd)) {
+      return sendTodPrompt(message, cmd);
+    }
 
     if (cmd === 'priv') {
       const wait=cooldownSeconds(message.guild.id,message.author.id,'priv');
