@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "description": "3C moderation, AFK, tickets and utility Discord bot",
   "main": "index.js",
-  "scripts": { "start": "node index.js" },
-  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "discord.js": "^14.24.2",
     "dotenv": "^16.6.1",
-    "mongodb": "^6.20.0"
+    "mongodb": "^6.20.0",
+    "@napi-rs/canvas": "^0.1.80"
   }
 }
