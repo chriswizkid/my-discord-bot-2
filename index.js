@@ -942,68 +942,59 @@ client.on('inviteDelete', invite => {
   if (snapshot) snapshot.delete(invite.code);
 });
 
+let welcomeBackgroundPromise;
+
 async function createWelcomeCard(member, memberCount) {
-  const Jimp = require('jimp');
-  const width = 1200;
-  const height = 407;
-  const bgPath = path.join(__dirname, 'assets', '3c-welcome-bg.jpg.b64');
-  const bgBuffer = Buffer.from(fs.readFileSync(bgPath, 'utf8').trim(), 'base64');
-  const image = await Jimp.read(bgBuffer);
-  image.resize(width, height);
-  image.scan(0, 0, width, height, function (x, y, idx) {
-    this.bitmap.data[idx] = Math.round(this.bitmap.data[idx] * 0.62);
-    this.bitmap.data[idx + 1] = Math.round(this.bitmap.data[idx + 1] * 0.62);
-    this.bitmap.data[idx + 2] = Math.round(this.bitmap.data[idx + 2] * 0.62);
-  });
+  const sharp = require('sharp');
+  if (!welcomeBackgroundPromise) {
+    welcomeBackgroundPromise = (async () => {
+      const bgPath = path.join(__dirname, 'assets', '3c-welcome-bg.jpg.b64');
+      const bgBuffer = Buffer.from(fs.readFileSync(bgPath, 'utf8').trim(), 'base64');
+      return sharp(bgBuffer).resize(1200, 407, { fit: 'cover' })
+        .modulate({ brightness: 0.62 }).jpeg({ quality: 88 }).toBuffer();
+    })();
+  }
+  const background = await welcomeBackgroundPromise;
 
-  const avatarX = 82, avatarY = 103;
-  let avatar = null;
-  const avatarUrls = [
-    member.user.displayAvatarURL({ extension: 'png', forceStatic: true, size: 256 }),
-    member.user.defaultAvatarURL
-  ];
-  for (const avatarUrl of avatarUrls) {
-    try {
-      const avatarResponse = await fetch(avatarUrl, { headers: { 'User-Agent': '3C-Bot/1.0' } });
-      if (!avatarResponse.ok) continue;
-      const avatarBytes = Buffer.from(await avatarResponse.arrayBuffer());
-      avatar = await Jimp.read(avatarBytes);
-      break;
-    } catch (avatarError) {
-      console.warn('Could not decode avatar candidate; trying fallback:', avatarError.message);
-    }
+  let avatarBuffer;
+  try {
+    const avatarUrl = member.user.displayAvatarURL({ extension: 'png', forceStatic: true, size: 128 });
+    const response = await fetch(avatarUrl, { headers: { 'User-Agent': '3C-Bot/1.0' } });
+    if (!response.ok) throw new Error('Avatar request returned HTTP ' + response.status);
+    avatarBuffer = await sharp(Buffer.from(await response.arrayBuffer()))
+      .resize(184, 184, { fit: 'cover' }).png().toBuffer();
+  } catch (error) {
+    console.warn('[WELCOME] Avatar fetch/decode failed; using default avatar:', error.message);
+    const fallback = member.user.defaultAvatarURL;
+    const response = await fetch(fallback);
+    if (!response.ok) throw new Error('Could not fetch fallback avatar');
+    avatarBuffer = await sharp(Buffer.from(await response.arrayBuffer()))
+      .resize(184, 184, { fit: 'cover' }).png().toBuffer();
   }
-  if (avatar) {
-    avatar.cover(184, 184);
-    avatar.scan(0, 0, 184, 184, function (x, y, idx) {
-      const dx = x - 91.5, dy = y - 91.5;
-      if (dx * dx + dy * dy > 91.5 * 91.5) this.bitmap.data[idx + 3] = 0;
-    });
-  } else {
-    console.warn('Using placeholder avatar in welcome card for ' + member.user.tag);
-    avatar = new Jimp(184, 184, 0x477BFFFF);
-  }
-  const ring = new Jimp(204, 204, 0xFFFFFFFF);
-  const circle = new Jimp(184, 184, 0x00000000);
-  circle.composite(avatar, 0, 0);
-  image.composite(ring, avatarX - 10, avatarY - 10);
-  image.composite(circle, avatarX, avatarY);
 
-  const displayName = String(member.displayName || member.user.username).replace(/\s+/g, ' ').slice(0, 48);
-  const font64 = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
-  const font32 = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-  const shadow64 = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-  const shadow32 = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
-  let welcomeText = 'Welcome, ' + displayName + '!';
-  while (Jimp.measureText(font64, welcomeText) > 850 && welcomeText.length > 18) {
-    welcomeText = welcomeText.slice(0, -2) + '…!';
-  }
+  const displayName = String(member.displayName || member.user.username)
+    .replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch]))
+    .replace(/\s+/g, ' ').slice(0, 48);
+  const welcomeText = 'Welcome, ' + displayName + '!';
   const memberLine = 'You are the ' + memberCount + ordinalSuffix(memberCount) + ' member!';
-  image.print(shadow64, 263, 128, welcomeText);
-  image.print(font64, 260, 125, welcomeText);
-  image.print(shadow32, 263, 218, memberLine);
-  image.print(font32, 260, 215, memberLine);
-  return await image.getBufferAsync(Jimp.MIME_JPEG);
+  const overlay = Buffer.from(`<svg width="1200" height="407" xmlns="http://www.w3.org/2000/svg">
+    <defs><clipPath id="avatarClip"><circle cx="174" cy="195" r="92"/></clipPath></defs>
+    <circle cx="174" cy="195" r="102" fill="#fff"/>
+    <g fill="#000" opacity=".72" font-family="Arial,sans-serif">
+      <text x="263" y="178" font-size="64">${welcomeText}</text>
+      <text x="263" y="268" font-size="32">${memberLine}</text>
+    </g>
+    <g fill="#fff" font-family="Arial,sans-serif">
+      <text x="260" y="175" font-size="64">${welcomeText}</text>
+      <text x="260" y="265" font-size="32">${memberLine}</text>
+    </g>
+  </svg>`);
+  return sharp(background)
+    .composite([
+      { input: avatarBuffer, left: 82, top: 103 },
+      { input: overlay, left: 0, top: 0 }
+    ])
+    .jpeg({ quality: 88, mozjpeg: true }).toBuffer();
 }
 
 client.on('guildMemberAdd', async member => {
