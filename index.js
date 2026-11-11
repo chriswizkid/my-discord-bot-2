@@ -962,14 +962,18 @@ async function createWelcomeCard(member, memberCount) {
     const response = await fetch(avatarUrl, { headers: { 'User-Agent': '3C-Bot/1.0' } });
     if (!response.ok) throw new Error('Avatar request returned HTTP ' + response.status);
     avatarBuffer = await sharp(Buffer.from(await response.arrayBuffer()))
-      .resize(184, 184, { fit: 'cover' }).png().toBuffer();
+      .resize(184, 184, { fit: 'cover' })
+      .composite([{ input: Buffer.from('<svg width="184" height="184"><circle cx="92" cy="92" r="92" fill="white"/></svg>'), blend: 'dest-in' }])
+      .png().toBuffer();
   } catch (error) {
     console.warn('[WELCOME] Avatar fetch/decode failed; using default avatar:', error.message);
     const fallback = member.user.defaultAvatarURL;
     const response = await fetch(fallback);
     if (!response.ok) throw new Error('Could not fetch fallback avatar');
     avatarBuffer = await sharp(Buffer.from(await response.arrayBuffer()))
-      .resize(184, 184, { fit: 'cover' }).png().toBuffer();
+      .resize(184, 184, { fit: 'cover' })
+      .composite([{ input: Buffer.from('<svg width="184" height="184"><circle cx="92" cy="92" r="92" fill="white"/></svg>'), blend: 'dest-in' }])
+      .png().toBuffer();
   }
 
   const displayName = String(member.displayName || member.user.username)
@@ -979,7 +983,7 @@ async function createWelcomeCard(member, memberCount) {
   const memberLine = 'You are the ' + memberCount + ordinalSuffix(memberCount) + ' member!';
   const overlay = Buffer.from(`<svg width="1200" height="407" xmlns="http://www.w3.org/2000/svg">
     <defs><clipPath id="avatarClip"><circle cx="174" cy="195" r="92"/></clipPath></defs>
-    <circle cx="174" cy="195" r="102" fill="#fff"/>
+    <circle cx="174" cy="195" r="102" fill="none" stroke="#fff" stroke-width="20"/>
     <g fill="#000" opacity=".72" font-family="Arial,sans-serif">
       <text x="263" y="178" font-size="64">${welcomeText}</text>
       <text x="263" y="268" font-size="32">${memberLine}</text>
