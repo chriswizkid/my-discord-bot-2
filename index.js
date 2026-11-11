@@ -956,16 +956,33 @@ async function createWelcomeCard(member, memberCount) {
     this.bitmap.data[idx + 2] = Math.round(this.bitmap.data[idx + 2] * 0.62);
   });
 
-  const avatarUrl = member.displayAvatarURL({ extension: 'png', size: 256 });
-  const avatarResponse = await fetch(avatarUrl);
-  if (!avatarResponse.ok) throw new Error('Could not download member avatar: HTTP ' + avatarResponse.status);
-  const avatar = await Jimp.read(Buffer.from(await avatarResponse.arrayBuffer()));
-  avatar.cover(184, 184);
   const avatarX = 82, avatarY = 103;
-  avatar.scan(0, 0, 184, 184, function (x, y, idx) {
-    const dx = x - 91.5, dy = y - 91.5;
-    if (dx * dx + dy * dy > 91.5 * 91.5) this.bitmap.data[idx + 3] = 0;
-  });
+  let avatar = null;
+  const avatarUrls = [
+    member.user.displayAvatarURL({ extension: 'png', forceStatic: true, size: 256 }),
+    member.user.defaultAvatarURL
+  ];
+  for (const avatarUrl of avatarUrls) {
+    try {
+      const avatarResponse = await fetch(avatarUrl, { headers: { 'User-Agent': '3C-Bot/1.0' } });
+      if (!avatarResponse.ok) continue;
+      const avatarBytes = Buffer.from(await avatarResponse.arrayBuffer());
+      avatar = await Jimp.read(avatarBytes);
+      break;
+    } catch (avatarError) {
+      console.warn('Could not decode avatar candidate; trying fallback:', avatarError.message);
+    }
+  }
+  if (avatar) {
+    avatar.cover(184, 184);
+    avatar.scan(0, 0, 184, 184, function (x, y, idx) {
+      const dx = x - 91.5, dy = y - 91.5;
+      if (dx * dx + dy * dy > 91.5 * 91.5) this.bitmap.data[idx + 3] = 0;
+    });
+  } else {
+    console.warn('Using placeholder avatar in welcome card for ' + member.user.tag);
+    avatar = new Jimp(184, 184, 0x477BFFFF);
+  }
   const ring = new Jimp(204, 204, 0xFFFFFFFF);
   const circle = new Jimp(184, 184, 0x00000000);
   circle.composite(avatar, 0, 0);
@@ -1021,7 +1038,8 @@ client.on('guildMemberAdd', async member => {
       const card = await createWelcomeCard(member, guild.memberCount);
       await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3c-welcome.jpg' })] });
     } catch (error) {
-      console.error('Welcome card render failed:', error);
+      console.error('Welcome card render failed:', error && error.stack ? error.stack : error);
+      await welcomeChannel.send({ content: '⚠️ The welcome card could not be rendered. Check the bot logs for the exact error.' }).catch(() => {});
     }
   }
 });
