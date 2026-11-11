@@ -37,6 +37,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildInvites,
     GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
@@ -63,6 +64,9 @@ const defaultData = {
   emergencyCleanup: {},
   webhooks: {},
   webhookSchedules: [],
+  welcomeChannels: {},
+  goodbyeChannels: {},
+  inviteHistory: {},
 };
 let data = loadData();
 function loadData() {
@@ -622,6 +626,9 @@ const slashCommandSpecs = [
 ['panelbutton','Add a button to a panel.',[S('message_id','Panel message ID',true),S('label','Button label',true),S('destination','Channel ID or HTTPS URL',true)]],
 ['button','Add a link or channel button to a bot message.',[S('message_id','Message ID',true),S('label','Button label',true),S('destination','Channel mention/ID or HTTPS URL',true)]],
 ['truth','Get a random truth prompt.',[]],
+['setwelcome','Set the welcome channel.',[C('channel','Welcome channel')]],
+['setgoodbye','Set the goodbye channel.',[C('channel','Goodbye channel')]],
+['invites','View invite statistics.',[U('member','Member',false)]],
 ['dare','Get a random dare prompt.',[]],
 ['tod','Get a random truth or dare prompt.',[]],
 ['wyr','Get a Would You Rather prompt.',[]],
@@ -910,9 +917,77 @@ client.on('guildAuditLogEntryCreate', (entry, guild) => {
   }
 });
 
+async function initializeInviteSnapshots() {
+  for (const guild of client.guilds.cache.values()) {
+    const invites = await guild.invites.fetch().catch(() => null);
+    if (invites) inviteSnapshots.set(guild.id, new Map(invites.map(inv => [inv.code, inv.uses || 0])));
+  }
+}
+
+const inviteSnapshots = new Map();
+const recentInviterJoins = new Map();
+client.on('inviteCreate', async invite => {
+  if (!invite.guild) return;
+  const snapshot = inviteSnapshots.get(invite.guild.id) || new Map();
+  snapshot.set(invite.code, invite.uses || 0);
+  inviteSnapshots.set(invite.guild.id, snapshot);
+});
+client.on('inviteDelete', invite => {
+  if (!invite.guild) return;
+  const snapshot = inviteSnapshots.get(invite.guild.id);
+  if (snapshot) snapshot.delete(invite.code);
+});
+
+client.on('guildMemberAdd', async member => {
+  const guild = member.guild;
+  const oldSnapshot = inviteSnapshots.get(guild.id) || new Map();
+  const invites = await guild.invites.fetch().catch(() => null);
+  let inviterId = null;
+  if (invites) {
+    const used = invites.find(inv => (inv.uses || 0) > (oldSnapshot.get(inv.code) || 0));
+    if (used?.inviter?.id) inviterId = used.inviter.id;
+    inviteSnapshots.set(guild.id, new Map(invites.map(inv => [inv.code, inv.uses || 0])));
+  }
+  const guildRecords = data.inviteHistory[guild.id] || (data.inviteHistory[guild.id] = {});
+  const recentKey = guild.id + ':' + (inviterId || 'unknown');
+  const recent = (recentInviterJoins.get(recentKey) || []).filter(t => Date.now() - t < 10 * 60 * 1000);
+  recent.push(Date.now());
+  recentInviterJoins.set(recentKey, recent);
+  const accountAge = Date.now() - member.user.createdTimestamp;
+  const suspicious = Boolean(inviterId && accountAge < 7 * 86400000 && recent.length >= 3);
+  guildRecords[member.id] = { memberId: member.id, inviterId, joinedAt: Date.now(), leftAt: null, isBot: member.user.bot, suspicious };
+  saveData();
+  const welcomeChannelId = data.welcomeChannels[guild.id];
+  const welcomeChannel = welcomeChannelId ? guild.channels.cache.get(welcomeChannelId) : null;
+  if (welcomeChannel?.isTextBased()) {
+    const inviterText = inviterId ? '<@' + inviterId + '>' : 'an unknown invite';
+    const count = inviterId ? Object.values(guildRecords).filter(x => x.inviterId === inviterId && !x.leftAt && !x.isBot && !x.suspicious).length : 0;
+    await welcomeChannel.send({ content: '**' + member.toString() + '** has been invited by **' + inviterText + '** and has now ' + count + ' invites.', allowedMentions: { users: [member.id, ...(inviterId ? [inviterId] : [])] } }).catch(() => {});
+    await welcomeChannel.send({ content: 'Welcome, ' + member.toString() + '! You are the ' + guild.memberCount + ordinalSuffix(guild.memberCount) + ' member!', allowedMentions: { users: [member.id] } }).catch(() => {});
+  }
+});
+
+client.on('guildMemberRemove', async member => {
+  const record = data.inviteHistory[member.guild.id]?.[member.id];
+  if (record && !record.leftAt) { record.leftAt = Date.now(); saveData(); }
+  const goodbyeChannelId = data.goodbyeChannels[member.guild.id];
+  const goodbyeChannel = goodbyeChannelId ? member.guild.channels.cache.get(goodbyeChannelId) : null;
+  if (goodbyeChannel?.isTextBased()) {
+    const inviterText = record?.inviterId ? '**<@' + record.inviterId + '>**' : '**an unknown inviter**';
+    await goodbyeChannel.send({ content: member.toString() + ' left the server, they were invited by ' + inviterText + '.', allowedMentions: { users: [member.id, ...(record?.inviterId ? [record.inviterId] : [])] } }).catch(() => {});
+  }
+});
+
+function ordinalSuffix(n) {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return 'th';
+  return n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th';
+}
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initializeMongoDB();
+  await initializeInviteSnapshots();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
   await restoreTimedReactions().catch(err => console.error('Timed reaction recovery error:',err));
@@ -1939,6 +2014,32 @@ async function handleCommandMessage(message) {
       return sendTemp(message.channel, `Added button: ${label.slice(0, 80)}`, 5000);
     }
 
+
+    if (cmd === 'setwelcome' || cmd === 'setgoodbye') {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need Manage Server to configure this.', 5000);
+      const channel = message.mentions.channels.first() || message.guild.channels.cache.get(args[0]?.replace(/[<#>]/g, ''));
+      if (!channel || !channel.isTextBased()) return sendTemp(message.channel, 'Usage: ' + prefix + cmd + ' #channel', 5000);
+      if (cmd === 'setwelcome') data.welcomeChannels[message.guild.id] = channel.id;
+      else data.goodbyeChannels[message.guild.id] = channel.id;
+      saveData();
+      return sendTemp(message.channel, '✅ ' + (cmd === 'setwelcome' ? 'Welcome' : 'Goodbye') + ' messages will be sent in ' + channel + '.', 5000);
+    }
+
+    if (cmd === 'invites') {
+      const member = target || message.member;
+      const records = Object.values(data.inviteHistory[message.guild.id] || {}).filter(x => x.inviterId === member.id);
+      const left = records.filter(x => x.leftAt).length;
+      const active = records.filter(x => !x.leftAt);
+      const bots = active.filter(x => x.isBot).length;
+      const fake = active.filter(x => x.suspicious && !x.isBot).length;
+      const valid = active.filter(x => !x.isBot && !x.suspicious).length;
+      const lines = ['**Valid members:** ' + valid];
+      if (bots) lines.push('**Bots:** ' + bots);
+      if (fake) lines.push('**Suspicious:** ' + fake);
+      if (left) lines.push('**Left:** ' + left);
+      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📨 Invite Statistics').setDescription(member.toString() + '\n' + lines.join('\n')).setFooter({ text: '3C Bot • Tracked since invite tracking was enabled' }).setTimestamp();
+      return message.channel.send({ embeds: [embed] });
+    }
 
     if (['truth','dare','tod','wyr','nhie','random'].includes(cmd)) {
       return sendTodPrompt(message, cmd);
