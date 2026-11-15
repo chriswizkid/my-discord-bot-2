@@ -2350,7 +2350,7 @@ client.on('interactionCreate', async (interaction) => {
         new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Replacement title (optional)',TextInputStyle.Short,false,256)),
         new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Replacement description (optional)',TextInputStyle.Paragraph,false,4000)),
         new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7)),
-        new ActionRowBuilder().addComponents(field('webhook:image','Embed image URL','https://... (optional)',TextInputStyle.Short,false,400))
+        new ActionRowBuilder().addComponents(field('webhook:image','Image URL (line 1) / Title link URL (line 2)','Image URL (optional)\\nTitle link URL (optional)',TextInputStyle.Paragraph,false,800))
       );
       return interaction.showModal(modal);
     }
@@ -2366,7 +2366,7 @@ client.on('interactionCreate', async (interaction) => {
         new ActionRowBuilder().addComponents(field('webhook:title','Embed title','Title (optional)',TextInputStyle.Short,false,256)),
         new ActionRowBuilder().addComponents(field('webhook:description','Embed description','Description (optional)',TextInputStyle.Paragraph,false,4000)),
         new ActionRowBuilder().addComponents(field('webhook:color','Embed colour','#5865F2',TextInputStyle.Short,false,7)),
-        new ActionRowBuilder().addComponents(field('webhook:image','Embed image URL','https://... (optional)',TextInputStyle.Short,false,400))
+        new ActionRowBuilder().addComponents(field('webhook:image','Image URL (line 1) / Title link URL (line 2)','Image URL (optional)\\nTitle link URL (optional)',TextInputStyle.Paragraph,false,800))
       );
       return interaction.showModal(modal);
     }
@@ -2381,18 +2381,23 @@ client.on('interactionCreate', async (interaction) => {
       const title=interaction.fields.getTextInputValue('webhook:title').trim();
       const description=interaction.fields.getTextInputValue('webhook:description').trim();
       const colorRaw=interaction.fields.getTextInputValue('webhook:color').trim()||'#5865F2';
-      const imageUrl=interaction.fields.getTextInputValue('webhook:image').trim();
+      const imageLines=interaction.fields.getTextInputValue('webhook:image').split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
+      const imageUrl=imageLines[0]||'';
+      const titleUrl=imageLines[1]||'';
       const color=colorRaw.replace(/^#/,'');
       if(!/^[0-9a-fA-F]{6}$/.test(color))return interaction.reply({content:'❌ Embed colour must be a six-digit hex value, e.g. #5865F2.',ephemeral:true});
+      if(imageLines.length>2)return interaction.reply({content:'❌ Enter at most two URLs: image URL on line 1 and title link URL on line 2.',ephemeral:true});
       if(imageUrl&&!/^https:\/\/\S+$/i.test(imageUrl))return interaction.reply({content:'❌ Embed image must be a valid HTTPS URL.',ephemeral:true});
-      if(!content&&!title&&!description&&!imageUrl)return interaction.reply({content:'❌ Add message content or at least one embed field.',ephemeral:true});
+      if(titleUrl&&!/^https:\/\/\S+$/i.test(titleUrl))return interaction.reply({content:'❌ Embed title link must be a valid HTTPS URL.',ephemeral:true});
+      if(!content&&!title&&!description&&!imageUrl&&!titleUrl)return interaction.reply({content:'❌ Add message content or at least one embed field.',ephemeral:true});
       const embed=new EmbedBuilder().setColor(parseInt(color,16));
       if(title)embed.setTitle(title);
+      if(titleUrl&&title)embed.setURL(titleUrl);
       if(description)embed.setDescription(description);
       if(imageUrl)embed.setImage(imageUrl);
       try{
         const hook=new WebhookClient({id:record.id,token:record.token});
-        const payload={content:content||undefined,embeds:[title||description||imageUrl?embed:null].filter(Boolean),allowedMentions:{parse:[]}};
+        const payload={content:content||undefined,embeds:[title||description||imageUrl||titleUrl?embed:null].filter(Boolean),allowedMentions:{parse:[]}};
         const sent=isUpdate?await hook.editMessage(record.lastMessageId,payload):await hook.send(payload);
         record.lastMessageId=sent.id;record.lastMessageChannelId=record.channelId;saveData();
         return interaction.reply({content:isUpdate?`♻️ Updated the last webhook message in <#${record.channelId}>.`:`✅ Webhook message sent to <#${record.channelId}>. Message ID: \`${sent.id}\`\nUse **Add Link Buttons** to attach URL buttons.`,ephemeral:true});
