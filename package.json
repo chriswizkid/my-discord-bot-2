@@ -1,7 +1,7 @@
 {
-  "name": "3c-discord-bot",
+  "name": "3st-discord-bot",
   "version": "1.0.0",
-  "description": "3C moderation, AFK, tickets and utility Discord bot",
+  "description": "3ST Discord bot — ~Created By Chris_wizkid~",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
