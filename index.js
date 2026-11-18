@@ -1174,7 +1174,7 @@ client.on('messageCreate', async (message) => {
     console.error('[BLEHHH] Could not fetch server emojis:', error.message);
     return null;
   });
-  const emoji = emojis?.find(e => e.name === 'blehhh_emoji');
+  const emoji = emojis?.find(e => e.name === 'Blehhh_emoji');
   if (!emoji) {
     console.error('[BLEHHH] Server emoji "blehhh_emoji" was not found. Check the exact emoji name and bot access.');
     return;
@@ -1531,7 +1531,7 @@ async function handleCommandMessage(message) {
           console.error('[BLEHHH COMMAND] Could not fetch server emojis:', error.message);
           return null;
         });
-        const blehhhEmoji = serverEmojis?.find(e => e.name === 'blehhh_emoji');
+        const blehhhEmoji = serverEmojis?.find(e => e.name === 'Blehhh_emoji');
         if (blehhhEmoji) {
           await message.react(blehhhEmoji).catch(error => console.error('[BLEHHH COMMAND] Could not react with :blehhh_emoji::', error.message));
         } else {
@@ -1547,7 +1547,7 @@ async function handleCommandMessage(message) {
         }, duration);
         blehhhTimers.set(timerKey, timer);
 
-        return sendTemp(message.channel, `😛 ${target} has **blehhh** for **${prettyDuration(duration)}**!`, 5000);
+        return sendTemp(message.channel, `${blehhhEmoji ? `${blehhhEmoji} ` : ''}${target} has **blehhh** for **${prettyDuration(duration)}**!`, 5000);
       } catch (err) {
         console.error('Blehhh role error:', err);
         return sendTemp(message.channel, '❌ I could not give the **blehhh** role. Check my role position and Manage Roles permission.', 6000);
