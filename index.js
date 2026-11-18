@@ -606,7 +606,7 @@ async function sendTodPrompt(message, kind) {
       .setTimestamp();
     return await message.channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch (error) {
-    console.error('3C Truth or Dare API error:', error);
+    console.error('3ST Truth or Dare API error:', error);
     return sendTemp(message.channel, '❌ I could not get a suitable question right now. Please try again in a moment.', 5000);
   }
 }
@@ -821,7 +821,7 @@ async function recoverTicketPanels() {
   }
 
   // If a host/redeploy wiped data.json, recover already-posted public panels from Discord.
-  // Also recover a report-log channel by its fixed 3C-User-Report name.
+  // Also recover a report-log channel by its fixed 3ST-User-Report name.
   // Existing panel messages contain the stable ticket:create:<id> button. Existing ticket
   // channels let us recover the category, ticket-name base and access roles/users.
   for (const guild of client.guilds.cache.values()) {
@@ -1486,7 +1486,7 @@ async function handleCommandMessage(message) {
           { name: 'Joined Server', value: targetMember?.joinedTimestamp ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>` : 'Not in server', inline: true },
           { name: 'Staff Status', value: targetMember && isStaffMember(targetMember) ? 'Staff member' : 'Not staff', inline: true },
           { name: 'Roles', value: truncate(roles || 'No roles', 1024), inline: false },
-          { name: 'Warnings Received (3C tracked)', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
+          { name: 'Warnings Received (3ST tracked)', value: String(warningsFor(message.guild.id, targetUser.id).length), inline: true },
           { name: 'Moderation Cases Received (tracked)', value: String(received.length), inline: true },
           { name: 'Reports Received', value: String(Number(data.reportsReceived?.[key(message.guild.id, targetUser.id)] || 0)), inline: true }
         )
@@ -1494,7 +1494,7 @@ async function handleCommandMessage(message) {
       return message.channel.send({ embeds: [embed] });
     }
 
-    // STAFF-ONLY MODERATION DASHBOARD: actions this staff member has issued, as tracked by 3C.
+    // STAFF-ONLY MODERATION DASHBOARD: actions this staff member has issued, as tracked by 3ST.
     if (cmd === 'modcheck') {
       if (!isStaffMember(message.member)) return sendTemp(message.channel, '❌ Only authorized staff can use this command.', 5000);
       const targetUser = message.mentions.users.first();
@@ -1527,7 +1527,7 @@ async function handleCommandMessage(message) {
           { name: 'Moderation Cases Received', value: String(received.length), inline: true },
           { name: 'Recent Actions', value: truncate(recent.join('\n') || 'No tracked staff actions yet.', 1024), inline: false }
         )
-        .setFooter({ text: "3C-tracked actions only; other bots' private staff records need to be imported." }).setTimestamp();
+        .setFooter({ text: "3ST-tracked actions only; other bots' private staff records need to be imported." }).setTimestamp();
       return message.channel.send({ embeds: [embed] });
     }
 
@@ -1701,7 +1701,7 @@ async function handleCommandMessage(message) {
       if (/^(nothing|none|off)$/i.test(args[0])) {
         data.prefixes[message.guild.id] = '';
         saveData();
-        return sendTemp(message.channel, '✅ Prefix disabled. Use **@3C command** or slash commands from now on.', 7000);
+        return sendTemp(message.channel, '✅ Prefix disabled. Use **@3ST command** or slash commands from now on.', 7000);
       }
       if (args[0].length > 5 || /\s/.test(args[0])) return sendTemp(message.channel, '❌ Prefix must be 1–5 characters with no spaces, or use `nothing` to disable it.', 5000);
       data.prefixes[message.guild.id] = args[0]; saveData();
@@ -1821,7 +1821,7 @@ async function handleCommandMessage(message) {
     if (cmd === 'multipleticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const groupId = `multi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'General Support 📬', panelDescription: 'Choose a ticket type below and our team will help you.', footerText: '3ST Bot ~ Built for Rivals. United by 3C.', embedColor: 0x232428 };
+      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'General Support 📬', panelDescription: 'Choose a ticket type below and our team will help you.', footerText: '3ST Bot ~ Built for Rivals. United by 3ST.', embedColor: 0x232428 };
       const id = `mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null, tagIds: [], tagTypes: [], panelGroupId: groupId };
       data.ticketPanels[groupId].ticketIds.push(id);
@@ -1836,7 +1836,7 @@ async function handleCommandMessage(message) {
     // CLOSE TICKET — message command accepts a reason; button opens the reason modal.
     if (cmd === 'closeticket' || cmd === 'ct') {
       const topic = message.channel.topic || '';
-      if (!topic.startsWith('3ST-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
+      if (!topic.startsWith('3ST-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3ST ticket channel.', 5000);
       const topicParts = topic.split(':');
       const ownerId = topicParts[1];
       const ticketConfig = data.tickets[topicParts[2]];
@@ -2082,7 +2082,7 @@ async function handleCommandMessage(message) {
       await auditChannel.send({
         embeds: [new EmbedBuilder()
           .setColor(0x5865F2)
-          .setTitle('🛡️ 3C Audit Log Connected')
+          .setTitle('🛡️ 3ST Audit Log Connected')
           .setDescription('This existing channel is now the 3ST bot audit-log destination.')
           .addFields({ name: 'Channel', value: String(auditChannel) })
           .setTimestamp()]
@@ -2305,7 +2305,7 @@ client.on('interactionCreate', async (interaction) => {
       const modal=new ModalBuilder().setCustomId('webhook:create:modal').setTitle('Create a Webhook');
       const field=(id,label,placeholder,style=TextInputStyle.Short,required=false,max=400)=>new TextInputBuilder().setCustomId(id).setLabel(label).setPlaceholder(placeholder).setStyle(style).setRequired(required).setMaxLength(max);
       modal.addComponents(
-        new ActionRowBuilder().addComponents(field('webhook:name','Webhook name','3C Announcements',TextInputStyle.Short,true,80)),
+        new ActionRowBuilder().addComponents(field('webhook:name','Webhook name','3ST Announcements',TextInputStyle.Short,true,80)),
         new ActionRowBuilder().addComponents(field('webhook:channel','Destination channel ID','Paste a text channel ID',TextInputStyle.Short,true,25)),
         new ActionRowBuilder().addComponents(field('webhook:avatar','Avatar image URL','https://...',TextInputStyle.Short,false,400))
       );
@@ -2691,7 +2691,7 @@ client.on('interactionCreate', async (interaction) => {
         const ticketConfig = data.tickets[ticketId];
         const parentGroup = ticketConfig.panelGroupId ? data.ticketPanels[ticketConfig.panelGroupId] : null;
         const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
-        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3ST Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
+        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL: client.user.displayAvatarURL() });
         return embed;
       };
       config.panelChannelId=interaction.channel.id;
@@ -2704,7 +2704,7 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(group.embedColor ?? 0x232428)
           .setTitle(group.panelTitle || 'General Support 📬')
           .setDescription(group.panelDescription || 'Choose a ticket type below and our team will help you.')
-          .setFooter({ text: group.footerText || '3ST Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
+          .setFooter({ text: group.footerText || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL: client.user.displayAvatarURL() });
         const panelButtons = configuredIds.map(buildTicketButton);
         const panelRows = [];
         for (let i = 0; i < panelButtons.length; i += 5) panelRows.push(new ActionRowBuilder().addComponents(...panelButtons.slice(i, i + 5)));
@@ -2747,7 +2747,7 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
       const currentTitle = group?.panelTitle || config?.title || 'General Support 📬';
       const currentDescription = group?.panelDescription || config?.description || 'Choose a ticket type below and our team will help you.';
-      const currentFooter = group?.footerText || config?.footerText || '3ST Bot ~ Built for Rivals. United by 3C.';
+      const currentFooter = group?.footerText || config?.footerText || '3ST Bot ~ Built for Rivals. United by 3ST.';
       const modal = new ModalBuilder().setCustomId(`ticket:panelmodal:${panelId}`).setTitle('Edit Ticket Panel Embed');
       const f = (field, label, value, style, max) => new TextInputBuilder().setCustomId(field).setLabel(label).setValue(String(value).slice(0,max)).setStyle(style).setRequired(true).setMaxLength(max);
       modal.addComponents(
@@ -2831,7 +2831,7 @@ client.on('interactionCreate', async (interaction) => {
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3ST Bot ~ Built for Rivals. United by 3C.', iconURL:client.user.displayAvatarURL()});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
       const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
