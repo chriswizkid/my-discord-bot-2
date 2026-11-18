@@ -952,6 +952,7 @@ async function recoverTicketPanels() {
 }
 
 client.on('guildAuditLogEntryCreate', (entry, guild) => {
+  if (guild.id !== THREE_ST_GUILD_ID) return;
   try {
     const moderatorId = entry.executorId;
     const targetId = entry.targetId;
@@ -981,13 +982,13 @@ async function initializeInviteSnapshots() {
 const inviteSnapshots = new Map();
 const recentInviterJoins = new Map();
 client.on('inviteCreate', async invite => {
-  if (!invite.guild) return;
+  if (!invite.guild || invite.guild.id !== THREE_ST_GUILD_ID) return;
   const snapshot = inviteSnapshots.get(invite.guild.id) || new Map();
   snapshot.set(invite.code, invite.uses || 0);
   inviteSnapshots.set(invite.guild.id, snapshot);
 });
 client.on('inviteDelete', invite => {
-  if (!invite.guild) return;
+  if (!invite.guild || invite.guild.id !== THREE_ST_GUILD_ID) return;
   const snapshot = inviteSnapshots.get(invite.guild.id);
   if (snapshot) snapshot.delete(invite.code);
 });
@@ -1159,7 +1160,7 @@ client.on('messageCreate', async (message) => {
 client.on('messageDelete', async (message) => {
   try {
     if (message.partial) message = await message.fetch().catch(() => message);
-    if (!message.guild || !message.author || message.author.bot) return;
+    if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || !message.author || message.author.bot) return;
     const history=deletedSnipes.get(message.channel.id)||[];
     history.unshift({id:message.id,authorId:message.author.id,authorTag:message.author.tag,content:message.content||'[no text]',attachments:[...message.attachments.values()].map(a=>a.url),time:Date.now()});
     deletedSnipes.set(message.channel.id,history.slice(0,100));
@@ -1170,7 +1171,7 @@ client.on('messageDeleteBulk', async (messages) => {
   try {
     const ordered=[...messages.values()].sort((a,b)=>a.createdTimestamp-b.createdTimestamp);
     for(const message of ordered){
-      if(!message.guild||!message.author||message.author.bot)continue;
+      if(!message.guild||message.guild.id!==THREE_ST_GUILD_ID||!message.author||message.author.bot)continue;
       const history=deletedSnipes.get(message.channel.id)||[];
       if(history.some(item=>item.id===message.id))continue;
       history.unshift({id:message.id,authorId:message.author.id,authorTag:message.author.tag,content:message.content||'[no text]',attachments:[...message.attachments.values()].map(a=>a.url),time:Date.now()});
@@ -1180,7 +1181,7 @@ client.on('messageDeleteBulk', async (messages) => {
 });
 
 client.on('messageUpdate', async (oldMessage, newMessage) => {
-  if (!oldMessage.guild || oldMessage.author?.bot) return;
+  if (!oldMessage.guild || oldMessage.guild.id !== THREE_ST_GUILD_ID || oldMessage.author?.bot) return;
   if (oldMessage.partial || newMessage.partial) return;
   if (oldMessage.content === newMessage.content) return;
   editedSnipes.set(newMessage.channel.id, {
@@ -2258,8 +2259,8 @@ async function handleCommandMessage(message) {
         const wait=cooldownSeconds(message.guild.id,message.author.id,'poop');if(wait)return sendTemp(message.channel,'⏳ Wait '+wait+'s before using ?poop again.',4000);
         kind='poop';emoji='💩';roleId=POOP_ROLE_ID;duration=300000;
       }else{
-        const allowed=OWNER_ROLE_IDS.concat([STAFF_ROLE_ID, LEVEL_67_ROLE_ID, BLEHHH_BOOSTER_ROLE_ID, BLEHHH_BOOSTER_TOO_ROLE_ID]);
-        if(!hasAnyRoleOrAdmin(message.member,allowed))return sendTemp(message.channel,'you dont have permission to use this',5000);
+        const allowed=[STAFF_ROLE_ID, LEVEL_67_ROLE_ID, BLEHHH_BOOSTER_ROLE_ID, BLEHHH_BOOSTER_TOO_ROLE_ID];
+        if(!isOwnerMember(message.member)&&!hasAnyRoleOrAdmin(message.member,allowed))return sendTemp(message.channel,'you dont have permission to use this',5000);
         const rest=args.filter(x=>!/^<@!?\d+>$/.test(x));
         emoji=rest[0];duration=parseDuration(rest[1]);
         if(!emoji||!duration||duration>2592000000)return sendTemp(message.channel,'Usage: '+prefix+'reactset @user emoji duration (max 30 days)',6000);
