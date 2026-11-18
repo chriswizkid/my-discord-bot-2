@@ -129,7 +129,8 @@ async function initializeMongoDB() {
   }
 }
 
-const OWNER_ROLE_IDS = ['1572313678580027402', '1572312761713823754', '1572312852096618566'];
+const THREE_ST_GUILD_ID = '1564309904704020560';
+const OWNER_USER_IDS = ['1572313678580027402', '1572312761713823754', '1572312852096618566'];
 const STAFF_ROLE_ID = '1572314022894768259';
 const LEVEL_30_ROLE_ID = '1572498737673277460';
 const LEVEL_67_ROLE_ID = '1572502684811132958';
@@ -152,7 +153,7 @@ const POOP_ROLE_ID = '1572502299199283240';
 const BIRTHDAY_ROLE_ID = '1572506993225244763';
 
 function isOwnerMember(member) {
-  return Boolean(member?.roles?.cache && OWNER_ROLE_IDS.some(id => member.roles.cache.has(id)));
+  return Boolean(member?.id && OWNER_USER_IDS.includes(member.id));
 }
 
 function isLevel30Member(member) {
@@ -719,9 +720,34 @@ const slashCommands = slashCommandSpecs.map(([name,description,options]) => {
   return {name,description,options, ...(default_member_permissions !== undefined ? {default_member_permissions} : {})};
 });
 
+function buildInviteStatsEmbed(guild, member) {
+  const records = Object.values(data.inviteHistory[guild.id] || {}).filter(x => x.inviterId === member.id);
+  const left = records.filter(x => x.leftAt).length;
+  const active = records.filter(x => !x.leftAt);
+  const bots = active.filter(x => x.isBot).length;
+  const suspicious = active.filter(x => x.suspicious && !x.isBot).length;
+  const valid = active.filter(x => !x.isBot && !x.suspicious).length;
+  const lines = ['**Valid members:** ' + valid];
+  if (bots) lines.push('**Bots:** ' + bots);
+  if (suspicious) lines.push('**Suspicious:** ' + suspicious);
+  if (left) lines.push('**Left:** ' + left);
+  return new EmbedBuilder().setColor(0x5865F2).setTitle('📨 Invite Statistics')
+    .setDescription(member.toString() + '\n' + lines.join('\n'))
+    .setFooter({ text: '3ST Bot • Tracked since invite tracking was enabled' }).setTimestamp();
+}
+
 async function dispatchSlashCommand(interaction) {
   await interaction.deferReply();
+  if (!interaction.guild || interaction.guildId !== THREE_ST_GUILD_ID) {
+    return interaction.editReply('❌ 3ST Bot is configured for the 3ST server only.');
+  }
   const command = interaction.commandName;
+  if (command === 'invites') {
+    const selectedUser = interaction.options.getUser('member') || interaction.user;
+    const selectedMember = await interaction.guild.members.fetch(selectedUser.id).catch(() => null);
+    if (!selectedMember) return interaction.editReply('❌ I could not find that member in this server.');
+    return interaction.editReply({ embeds: [buildInviteStatsEmbed(interaction.guild, selectedMember)] });
+  }
   if (command === 'commands') {
     return interaction.editReply(buildCommandsPayload(getPrefix(interaction.guildId), 0));
   }
@@ -946,6 +972,7 @@ client.on('guildAuditLogEntryCreate', (entry, guild) => {
 
 async function initializeInviteSnapshots() {
   for (const guild of client.guilds.cache.values()) {
+    if (guild.id !== THREE_ST_GUILD_ID) continue;
     const invites = await guild.invites.fetch().catch(() => null);
     if (invites) inviteSnapshots.set(guild.id, new Map(invites.map(inv => [inv.code, inv.uses || 0])));
   }
@@ -1028,6 +1055,7 @@ async function createWelcomeCard(member, memberCount) {
 }
 
 client.on('guildMemberAdd', async member => {
+  if (member.guild.id !== THREE_ST_GUILD_ID) return;
   const eventStartedAt = Date.now();
   const guild = member.guild;
   console.log('[WELCOME] MEMBER_ADD event received guild=' + guild.id + ' member=' + member.id);
@@ -1082,6 +1110,7 @@ client.on('guildMemberAdd', async member => {
 });
 
 client.on('guildMemberRemove', async member => {
+  if (member.guild.id !== THREE_ST_GUILD_ID) return;
   const record = data.inviteHistory[member.guild.id]?.[member.id];
   if (record && !record.leftAt) { record.leftAt = Date.now(); saveData(); }
   const goodbyeChannelId = data.goodbyeChannels[member.guild.id];
@@ -1112,13 +1141,14 @@ client.once('ready', async () => {
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
   await restoreTimedReactions().catch(err => console.error('Timed reaction recovery error:',err));
   await restoreWebhookSchedules().catch(err => console.error('Webhook schedule recovery error:',err));
-  const registeredSlashCommands = await client.application.commands.set(slashCommands); console.log(`Registered ${registeredSlashCommands.size} global slash commands.`);
+  const registeredSlashCommands = await client.application.commands.set(slashCommands, THREE_ST_GUILD_ID);
+  console.log(`Registered ${registeredSlashCommands.size} 3ST guild slash commands for ${THREE_ST_GUILD_ID}.`);
   client.user.setPresence({ activities: [{ name: 'With chris_wizkid', type: 0 }], status: 'online' });
 });
 
 // React to every message from a member currently holding the Blehhh role.
 client.on('messageCreate', async (message) => {
-  if (!message.guild || message.author.bot) return;
+  if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
   const effects=(data.activeTimedReactions||{})[key(message.guild.id,message.author.id)]||[];
   for(const effect of effects){if(effect.expiresAt>Date.now())await message.react(effect.emoji).catch(()=>{});}
   if (!message.member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
@@ -1163,7 +1193,7 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
 });
 
 async function handleCommandMessage(message) {
-  if (!message.guild || message.author.bot) return;
+  if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
   if (data.active67?.[key(message.guild.id,message.author.id)]) {
     const emoji=message.guild.emojis.cache.find(e=>e.name==='6777');
     if(emoji)await message.react(emoji).catch(()=>{});
@@ -2180,18 +2210,7 @@ async function handleCommandMessage(message) {
 
     if (cmd === 'invites') {
       const member = target || message.member;
-      const records = Object.values(data.inviteHistory[message.guild.id] || {}).filter(x => x.inviterId === member.id);
-      const left = records.filter(x => x.leftAt).length;
-      const active = records.filter(x => !x.leftAt);
-      const bots = active.filter(x => x.isBot).length;
-      const fake = active.filter(x => x.suspicious && !x.isBot).length;
-      const valid = active.filter(x => !x.isBot && !x.suspicious).length;
-      const lines = ['**Valid members:** ' + valid];
-      if (bots) lines.push('**Bots:** ' + bots);
-      if (fake) lines.push('**Suspicious:** ' + fake);
-      if (left) lines.push('**Left:** ' + left);
-      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📨 Invite Statistics').setDescription(member.toString() + '\n' + lines.join('\n')).setFooter({ text: '3ST Bot • Tracked since invite tracking was enabled' }).setTimestamp();
-      return message.channel.send({ embeds: [embed] });
+      return message.channel.send({ embeds: [buildInviteStatsEmbed(message.guild, member)] });
     }
 
     if (['truth','dare','tod','wyr','nhie','random'].includes(cmd)) {
@@ -2271,6 +2290,10 @@ client.on('messageCreate', handleCommandMessage);
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (interaction.guildId && interaction.guildId !== THREE_ST_GUILD_ID) {
+      if (interaction.isRepliable()) return interaction.reply({ content: '❌ 3ST Bot is configured for the 3ST server only.', ephemeral: true }).catch(() => {});
+      return;
+    }
     if(interaction.isButton()&&interaction.customId.startsWith('emergency:')){
       const [,action,guildId,allowedUserId]=interaction.customId.split(':');
       const confirmer=await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
