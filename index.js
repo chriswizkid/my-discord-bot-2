@@ -27,6 +27,7 @@ const path = require('path');
 const { MongoClient } = require('mongodb');
 
 const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME;
 let mongoClient = null;
 let mongoCollection = null;
 let mongoSaveQueue = Promise.resolve();
@@ -107,7 +108,7 @@ async function initializeMongoDB() {
   try {
     mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
     await mongoClient.connect();
-    const db = mongoClient.db();
+    const db = MONGODB_DB_NAME ? mongoClient.db(MONGODB_DB_NAME) : mongoClient.db();
     const collection = db.collection('bot_state');
     const stored = await collection.findOne({ _id: 'main' });
 
