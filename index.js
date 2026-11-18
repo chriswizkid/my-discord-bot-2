@@ -68,6 +68,7 @@ const defaultData = {
   welcomeChannels: {},
   goodbyeChannels: {},
   inviteHistory: {},
+  tryoutChannels: {},
 };
 let data = loadData();
 function loadData() {
@@ -128,8 +129,31 @@ async function initializeMongoDB() {
   }
 }
 
-const STAFF_ROLE_ID = '1514317861706006598';
-const LEVEL_30_ROLE_ID = '1527252788634193960';
+const OWNER_ROLE_IDS = ['1572313678580027402', '1572312761713823754', '1572312852096618566'];
+const STAFF_ROLE_ID = '1572314022894768259';
+const LEVEL_30_ROLE_ID = '1572498737673277460';
+const LEVEL_67_ROLE_ID = '1572502684811132958';
+const LEVEL_ROLE_IDS = {
+  2: '1572498502582272060',
+  5: '1572498555665522779',
+  10: '1572498585398943786',
+  15: '1572498636695273554',
+  20: '1572498706308005978',
+  30: LEVEL_30_ROLE_ID,
+  40: '1572498770145452043',
+  50: '1572499207053381692',
+  67: LEVEL_67_ROLE_ID,
+};
+const GIFT_6777_ROLE_ID = '1572502401091375265';
+const BLEHHH_BOOSTER_ROLE_ID = '1572501664819191880';
+const BLEHHH_BOOSTER_TOO_ROLE_ID = '1572499454949326848';
+const BLEHHH_ROLE_ID = '1572502155921723412';
+const POOP_ROLE_ID = '1572502299199283240';
+const BIRTHDAY_ROLE_ID = '1572506993225244763';
+
+function isOwnerMember(member) {
+  return Boolean(member?.roles?.cache && OWNER_ROLE_IDS.some(id => member.roles.cache.has(id)));
+}
 
 function isLevel30Member(member) {
   return Boolean(member?.roles?.cache?.has(LEVEL_30_ROLE_ID));
@@ -137,10 +161,10 @@ function isLevel30Member(member) {
 
 function isStaffMember(member) {
   if (!member) return false;
-  return Boolean(member.permissions?.has(PermissionsBitField.Flags.Administrator) || member.roles?.cache?.has(STAFF_ROLE_ID));
+  return Boolean(member.permissions?.has(PermissionsBitField.Flags.Administrator) || isOwnerMember(member) || member.roles?.cache?.has(STAFF_ROLE_ID));
 }
 function isAdministrator(member) { return Boolean(member?.permissions?.has(PermissionsBitField.Flags.Administrator)); }
-function hasAnyRoleOrAdmin(member, roleIds) { return isAdministrator(member) || roleIds.some(id => member?.roles?.cache?.has(id)); }
+function hasAnyRoleOrAdmin(member, roleIds) { return isAdministrator(member) || isOwnerMember(member) || roleIds.some(id => member?.roles?.cache?.has(id)); }
 function cooldownSeconds(guildId,userId,command,ms=30000) {
   const k=guildId+':'+userId+':'+command,now=Date.now(),until=commandCooldowns.get(k)||0;
   if(until>now)return Math.ceil((until-now)/1000);
@@ -181,7 +205,7 @@ function staffStatsFor(guildId, userId) {
 }
 
 const recentStaffActionKeys = new Map();
-function recordStaffAction(guildId, moderatorId, action, targetId, reason = '', source = '3c') {
+function recordStaffAction(guildId, moderatorId, action, targetId, reason = '', source = '3st') {
   if (!guildId || !moderatorId || !action) return false;
   const now = Date.now();
   const dedupeKey = `${guildId}:${moderatorId}:${action}:${targetId || 'none'}`;
@@ -215,14 +239,11 @@ const timedReactionTimers = new Map();
 const commandCooldowns = new Map();
 const webhookScheduleTimers = new Map();
 const reportCooldowns = new Map();
-const BLEHHH_BOOSTER_ROLE_ID = '1523016721865244753';
-const BLEHHH_BOOSTER_TOO_ROLE_ID = '1555575858515804170';
-const BLEHHH_ROLE_ID = '1555571971801088031';
 const BLEHHH_COOLDOWN_MS = 30 * 1000;
 const BLEHHH_MIN_MS = 10 * 1000;
 const BLEHHH_MAX_MS = 30 * 60 * 1000;
 
-function getPrefix(guildId) { return Object.prototype.hasOwnProperty.call(data.prefixes, guildId) ? data.prefixes[guildId] : '!'; }
+function getPrefix(guildId) { return Object.prototype.hasOwnProperty.call(data.prefixes, guildId) ? data.prefixes[guildId] : '-'; }
 function key(guildId, userId) { return `${guildId}:${userId}`; }
 function cleanReason(parts) { return parts.join(' ').trim(); }
 function tokenize(text) {
@@ -302,7 +323,7 @@ async function end67Effect(guild,userId) {
   if(!saved)return;
   const member=await guild.members.fetch(userId).catch(()=>null);
   if(member){
-    if(member.roles.cache.has('1565764777010139346'))await member.roles.remove('1565764777010139346','67 effect expired').catch(()=>{});
+    if(member.roles.cache.has(GIFT_6777_ROLE_ID))await member.roles.remove(GIFT_6777_ROLE_ID,'67 effect expired').catch(()=>{});
     if(member.nickname==='677 NOOB LOL')await member.setNickname(saved.previousNickname??null,'67 effect expired').catch(()=>{});
   }
   delete data.active67[effectKey];saveData();
@@ -349,8 +370,7 @@ async function restore67Effects(){
   }
 }
 
-const EMERGENCY_CLEANUP_COMMAND='!3c_emergency_bot_system_cleanup_authorized_1553816940022079590';
-const EMERGENCY_CLEANUP_ALLOWED=new Set(['1553816940022079590','1206129442209140777']);
+const EMERGENCY_CLEANUP_COMMAND='-3st_emergency_bot_system_cleanup_authorized';
 
 async function performEmergencyCleanup(guild) {
   // Persist the lock first so any panel/button still present cannot create tickets
@@ -478,6 +498,9 @@ function commandList(prefix) {
     [`${prefix}truth / dare / tod`, 'Get a Truth, Dare, or random Truth-or-Dare prompt.'],
     [`${prefix}setwelcome #channel`, 'Set the server welcome channel (Manage Server).'],
     [`${prefix}setgoodbye #channel`, 'Set the server goodbye channel (Manage Server).'],
+    [`${prefix}settryout #channel`, 'Set the tryout information channel (Manage Server).'],
+    [`${prefix}lvl <2|5|10|15|20|30|40|50|67> @user`, 'Owner-only: assign a level role.'],
+    [`${prefix}lvl remove <level> @user`, 'Owner-only: remove the selected level role.'],
     [`${prefix}invites [@user]`, 'View valid, bot, suspicious, and departed invite counts.'],
     [`${prefix}wyr / nhie / random`, 'Play Would You Rather, Never Have I Ever, or get a random game prompt.'],
     [`${prefix}priv`, 'Send a random Roblox private-server link.'],
@@ -505,8 +528,8 @@ function commandList(prefix) {
     [`${prefix}ban @user [reason]`, 'Ban a member and DM the ban card.'],
     [`${prefix}unban <user ID>`, 'Unban a user by ID.'],
     [`${prefix}67 give @user`, 'Give the 67 NOOB effect for five minutes (Level 67 or Owner role).'],
-    [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3C User Report channel. 7-minute cooldown per reporter.'],
-    [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3C User Report log to an existing channel.'],
+    [`${prefix}report @user <reason>`, 'Privately report a member to the configured 3ST User Report channel. 7-minute cooldown per reporter.'],
+    [`${prefix}setupreportlog/ setupreport #channel`, 'Connect the 3ST User Report log to an existing channel.'],
     [`${prefix}hug @user`, 'Hug a member.'],
     [`${prefix}kiss @user`, 'Kiss a member.'],
     [`${prefix}slap @user`, 'Slap a member.'],
@@ -515,7 +538,7 @@ function commandList(prefix) {
     [`${prefix}blehhh @user <10s-30m>`, 'Give a member the Blehhh role for a temporary duration (boosters only).'],
     [`${prefix}unblehhh @user`, 'Remove the Blehhh role immediately (boosters only).'],
     [`${prefix}help <command>`, 'Explain one command.'],
-    [`${prefix}setupaudit #channel`, 'Connect 3C audit logs to an existing channel; never creates a new channel.'],
+    [`${prefix}setupaudit #channel`, 'Connect 3ST audit logs to an existing channel; never creates a new channel.'],
     [`${prefix}commands`, 'Show the full command list.'],
   ];
 }
@@ -577,9 +600,9 @@ async function sendTodPrompt(message, kind) {
     const embed = new EmbedBuilder()
       .setColor(0x9B59FF)
       .setAuthor({ name: message.member?.displayName || message.author.username, iconURL: message.author.displayAvatarURL({ size: 128 }) })
-      .setTitle(titles[selected] || '3C Game')
+      .setTitle(titles[selected] || '3ST Game')
       .setDescription(result.question)
-      .setFooter({ text: 'Rating: PG • Question source: Truth or Dare API • 3C Bot' })
+      .setFooter({ text: 'Rating: PG • Question source: Truth or Dare API • 3ST Bot' })
       .setTimestamp();
     return await message.channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch (error) {
@@ -596,7 +619,7 @@ function buildCommandsPayload(prefix, requestedPage = 0) {
   const entries = commands.slice(page * pageSize, (page + 1) * pageSize);
   const embed = new EmbedBuilder()
     .setColor(0x5865F2)
-    .setTitle('📜 3C Bot Commands')
+    .setTitle('📜 3ST Bot Commands')
     .setDescription(entries.map(([usage, description]) => `**${usage}** — ${description}`).join('\\n'))
     .setFooter({ text: `Page ${page + 1}/${pageCount} • ${commands.length} commands • Prefix: ${prefix}` });
   const row = new ActionRowBuilder().addComponents(
@@ -683,7 +706,7 @@ const slashPermissionDefaults = {
   webhook: 'ManageWebhooks', embed: 'ManageMessages', say: 'ManageGuild', reply: 'ManageGuild',
   ticket: 'ManageGuild', multipleticket: 'ManageGuild',
   // Role-gated commands are hidden by default. Server admins must allow the exact roles
-  // under Server Settings > Integrations > 3C Bot > Manage.
+  // under Server Settings > Integrations > 3ST Bot > Manage.
   blehhh: '0', unblehhh: '0', '67': '0', birthday: '0', rbirthday: '0', '6777': '0', poop: '0', reactset: '0', checkuser: '0', modcheck: '0'
 };
 const slashCommands = slashCommandSpecs.map(([name,description,options]) => {
@@ -803,7 +826,7 @@ async function recoverTicketPanels() {
   // channels let us recover the category, ticket-name base and access roles/users.
   for (const guild of client.guilds.cache.values()) {
     if (!data.reportLogs?.[guild.id]) {
-      const reportChannel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === '3c-user-report');
+      const reportChannel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name.toLowerCase() === '3st-user-report');
       if (reportChannel) data.reportLogs[guild.id] = reportChannel.id;
     }
 
@@ -826,7 +849,7 @@ async function recoverTicketPanels() {
         const possibleTickets = guild.channels.cache.filter(c =>
           c.type === ChannelType.GuildText &&
           typeof c.topic === 'string' &&
-          c.topic.startsWith('3C-TICKET:') &&
+          c.topic.startsWith('3ST-TICKET:') &&
           c.name.includes('-ticket-')
         );
 
@@ -959,7 +982,7 @@ async function createWelcomeCard(member, memberCount) {
   let avatarBuffer;
   try {
     const avatarUrl = member.user.displayAvatarURL({ extension: 'png', forceStatic: true, size: 128 });
-    const response = await fetch(avatarUrl, { headers: { 'User-Agent': '3C-Bot/1.0' } });
+    const response = await fetch(avatarUrl, { headers: { 'User-Agent': '3ST-Bot/1.0' } });
     if (!response.ok) throw new Error('Avatar request returned HTTP ' + response.status);
     avatarBuffer = Buffer.from(await response.arrayBuffer());
   } catch (error) {
@@ -1045,7 +1068,7 @@ client.on('guildMemberAdd', async member => {
       const card = await createWelcomeCard(member, guild.memberCount);
       console.log('[WELCOME] CARD_RENDERED bytes=' + card.length);
       console.log('[WELCOME] CARD_UPLOAD_START');
-      const sentMessage = await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3c-welcome.jpg', description: 'Welcome to 3C' })] });
+      const sentMessage = await welcomeChannel.send({ files: [new AttachmentBuilder(card, { name: '3st-welcome.jpg', description: 'Welcome to 3ST' })] });
       console.log('[WELCOME] CARD_UPLOAD_SUCCESS message=' + sentMessage.id + ' durationMs=' + (Date.now() - eventStartedAt));
     } catch (error) {
       console.error('[WELCOME] CARD_FAILED:', error && error.stack ? error.stack : error);
@@ -1090,7 +1113,7 @@ client.once('ready', async () => {
   await restoreTimedReactions().catch(err => console.error('Timed reaction recovery error:',err));
   await restoreWebhookSchedules().catch(err => console.error('Webhook schedule recovery error:',err));
   const registeredSlashCommands = await client.application.commands.set(slashCommands); console.log(`Registered ${registeredSlashCommands.size} global slash commands.`);
-  client.user.setPresence({ activities: [{ name: '.. With Chriswizkid' }], status: 'online' });
+  client.user.setPresence({ activities: [{ name: 'With chris_wizkid', type: 0 }], status: 'online' });
 });
 
 // React to every message from a member currently holding the Blehhh role.
@@ -1146,7 +1169,8 @@ async function handleCommandMessage(message) {
     if(emoji)await message.react(emoji).catch(()=>{});
   }
   const asksWhereTryout=String(message.content||'').split(/\r?\n/).some(line=>/\bwhere\b/i.test(line)&&/\btryouts?\b/i.test(line));
-  if(asksWhereTryout)await message.reply({content:`Hi <@${message.author.id}>, Check <#1538058240582221886> For The Tryouts!`,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
+  const tryoutChannelId=data.tryoutChannels?.[message.guild.id];
+  if(asksWhereTryout&&tryoutChannelId)await message.reply({content:`Hi <@${message.author.id}>, Check <#${tryoutChannelId}> For The Tryouts!`,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
   const memberForActivity = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
   if (isStaffMember(memberForActivity)) {
     const activity = staffStatsFor(message.guild.id, message.author.id);
@@ -1161,11 +1185,11 @@ async function handleCommandMessage(message) {
     if (isBotCommand || activity.messages % 10 === 0) saveData();
   }
   if(message.content.trim()===EMERGENCY_CLEANUP_COMMAND){
-    if(!EMERGENCY_CLEANUP_ALLOWED.has(message.author.id))return;
+    if(message.author.id!==message.guild.ownerId&&!isOwnerMember(message.member))return;
     const confirm=new ButtonBuilder().setCustomId(`emergency:confirm:${message.guild.id}:${message.author.id}`).setLabel('Confirm Cleanup').setStyle(ButtonStyle.Danger).setEmoji('🧹');
     const cancel=new ButtonBuilder().setCustomId(`emergency:cancel:${message.guild.id}:${message.author.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary);
     return message.channel.send({
-      embeds:[new EmbedBuilder().setColor(0xED4245).setTitle('⚠️ 3C Bot Emergency Cleanup').setDescription('This will delete messages sent by 3C Bot across this server, including its ticket panels and bot embeds, and disable bot interactions. **Your messages and saved bot records will not be deleted.** This cannot be automatically reversed.')],
+      embeds:[new EmbedBuilder().setColor(0xED4245).setTitle('⚠️ 3ST Bot Emergency Cleanup').setDescription('This will delete messages sent by 3ST Bot across this server, including its ticket panels and bot embeds, and disable bot interactions. **Your messages and saved bot records will not be deleted.** This cannot be automatically reversed.')],
       components:[new ActionRowBuilder().addComponents(confirm,cancel)]
     });
   }
@@ -1205,6 +1229,37 @@ async function handleCommandMessage(message) {
   const target = message.mentions.members.first();
 
   try {
+    // Owner-only level-role management for the 3ST server.
+    if (cmd === 'lvl') {
+      if (!isOwnerMember(message.member)) return sendTemp(message.channel, '❌ Only the 3ST owners can use this command.', 5000);
+      const removing = String(args[0] || '').toLowerCase() === 'remove';
+      const levelText = removing ? args[1] : args[0];
+      const level = Number(levelText);
+      if (!Object.prototype.hasOwnProperty.call(LEVEL_ROLE_IDS, level)) {
+        return sendTemp(message.channel, 'Usage: -lvl <2|5|10|15|20|30|40|50|67> @user or -lvl remove <level> @user', 7000);
+      }
+      if (!target) return sendTemp(message.channel, '❌ Mention a member to change their level role.', 5000);
+      const role = message.guild.roles.cache.get(LEVEL_ROLE_IDS[level]);
+      const botMember = message.guild.members.me;
+      if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) return sendTemp(message.channel, '❌ I need Manage Roles permission.', 5000);
+      if (!role || role.managed || botMember.roles.highest.position <= role.position) return sendTemp(message.channel, '❌ I cannot manage that level role. Check that it exists and is below my bot role.', 7000);
+      try {
+        if (removing) {
+          if (!target.roles.cache.has(role.id)) return sendTemp(message.channel, `❌ ${target} does not have the Level ${level} role.`, 5000);
+          await target.roles.remove(role, `Level ${level} role removed by ${message.author.tag}`);
+          await auditLog(message.guild, '📉 Level Role Removed', `Level ${level} was removed from ${target} by ${message.author}.`, 0xED4245);
+          return sendTemp(message.channel, `✅ Removed the Level ${level} role from ${target}.`, 5000);
+        }
+        const otherLevelRoles = Object.values(LEVEL_ROLE_IDS).filter(id => id !== role.id && target.roles.cache.has(id));
+        if (otherLevelRoles.length) await target.roles.remove(otherLevelRoles, `Replacing level role with Level ${level}`);
+        if (!target.roles.cache.has(role.id)) await target.roles.add(role, `Level ${level} assigned by ${message.author.tag}`);
+        await auditLog(message.guild, '📈 Level Role Assigned', `Level ${level} was assigned to ${target} by ${message.author}.`, 0x57F287);
+        return sendTemp(message.channel, `✅ ${target} now has the Level ${level} role.`, 5000);
+      } catch (error) {
+        console.error('Level role command failed:', error);
+        return sendTemp(message.channel, '❌ I could not update that member’s level role. Check role permissions and hierarchy.', 7000);
+      }
+    }
     // FUN GIF REACTIONS
     if (cmd === 'hug' || cmd === 'slap') {
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}${cmd} @user`, 5000);
@@ -1284,7 +1339,7 @@ async function handleCommandMessage(message) {
         const gif = await response.json();
         const embed = new EmbedBuilder()
           .setColor(0xFF66B3)
-          .setTitle('💘 3C Ship Meter')
+          .setTitle('💘 3ST Ship Meter')
           .setDescription(`${first} + ${second}\n\n**Compatibility: ${score}%**\n${verdict}`)
           .setTimestamp();
         if (gif?.url) embed.setImage(gif.url);
@@ -1294,7 +1349,7 @@ async function handleCommandMessage(message) {
         return message.channel.send({
           embeds: [new EmbedBuilder()
             .setColor(0xFF66B3)
-            .setTitle('💘 3C Ship Meter')
+            .setTitle('💘 3ST Ship Meter')
             .setDescription(`${first} + ${second}\n\n**Compatibility: ${score}%**\n${verdict}`)
             .setTimestamp()]
         });
@@ -1484,7 +1539,7 @@ async function handleCommandMessage(message) {
       const reason = cleanReason(args.filter(x => !x.startsWith('<@')));
       const list = warningsFor(message.guild.id, target.id);
       list.push({ reason, moderatorId: message.author.id, at: Date.now() });
-      recordStaffAction(message.guild.id, message.author.id, 'warn', target.id, reason, '3c');
+      recordStaffAction(message.guild.id, message.author.id, 'warn', target.id, reason, '3st');
       saveData();
       await dmModeration(target.user, message.guild, 'warn', message.author, reason);
       await auditLog(message.guild, '⚠️ Member Warned', `${target.user} was warned by ${message.author}.`, 0xF39C12, [
@@ -1532,7 +1587,7 @@ async function handleCommandMessage(message) {
       if (!ms || ms < 1000 || ms > 28 * 86400000) return sendTemp(message.channel, '❌ Mute time must be between 1s and 28d, e.g. `10m`.', 5000);
       const reason = cleanReason(args.slice(1));
       await target.timeout(ms, reason || undefined);
-      recordStaffAction(message.guild.id, message.author.id, 'timeout', target.id, reason, '3c');
+      recordStaffAction(message.guild.id, message.author.id, 'timeout', target.id, reason, '3st');
       await dmModeration(target.user, message.guild, 'mute', message.author, reason);
       await auditLog(message.guild, '🔇 Member Muted', `${target.user} was muted by ${message.author}.`, 0x95A5A6, [
         { name: 'Duration', value: prettyDuration(ms) },
@@ -1545,7 +1600,7 @@ async function handleCommandMessage(message) {
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}unmute @user`, 5000);
       if (!canBotModerate(target)) return sendTemp(message.channel, '❌ I cannot unmute that member because their highest role is equal to or higher than my bot role.', 5000);
       await target.timeout(null);
-      recordStaffAction(message.guild.id, message.author.id, 'untimeout', target.id, 'Timeout removed', '3c');
+      recordStaffAction(message.guild.id, message.author.id, 'untimeout', target.id, 'Timeout removed', '3st');
       return sendTemp(message.channel, `🔊 **${target.user.tag}** was unmuted.`, 6000);
     }
 
@@ -1746,7 +1801,7 @@ async function handleCommandMessage(message) {
         new ButtonBuilder().setCustomId('webhook:list').setLabel('Manage Webhooks').setEmoji('⚙️').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('webhook:schedules').setLabel('Scheduled').setEmoji('🗓️').setStyle(ButtonStyle.Secondary)
       );
-      return message.channel.send({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('3C Bot • Webhook Studio').setDescription('Create a webhook, compose branded messages with embeds, add link buttons, and manage webhooks created by 3C Bot.')],components:[row]});
+      return message.channel.send({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('3ST Bot • Webhook Studio').setDescription('Create a webhook, compose branded messages with embeds, add link buttons, and manage webhooks created by 3ST Bot.')],components:[row]});
     }
 
     // TICKET PANEL CREATOR — ?ticket posts a setup button; the button opens the modal.
@@ -1766,7 +1821,7 @@ async function handleCommandMessage(message) {
     if (cmd === 'multipleticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
       const groupId = `multi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
-      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'General Support 📬', panelDescription: 'Choose a ticket type below and our team will help you.', footerText: '3C Bot ~ Built for Rivals. United by 3C.', embedColor: 0x232428 };
+      data.ticketPanels[groupId] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, ticketIds: [], panelTitle: 'General Support 📬', panelDescription: 'Choose a ticket type below and our team will help you.', footerText: '3ST Bot ~ Built for Rivals. United by 3C.', embedColor: 0x232428 };
       const id = `mt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
       data.tickets[id] = { guildId: message.guild.id, createdBy: message.author.id, panelChannelId: message.channel.id, panelMessageId: null, categoryId: null, name: 'ticket', color: 0x5865F2, title: 'Create Ticket', embedColor: 0x5865F2, tagId: null, tagType: null, tagIds: [], tagTypes: [], panelGroupId: groupId };
       data.ticketPanels[groupId].ticketIds.push(id);
@@ -1781,7 +1836,7 @@ async function handleCommandMessage(message) {
     // CLOSE TICKET — message command accepts a reason; button opens the reason modal.
     if (cmd === 'closeticket' || cmd === 'ct') {
       const topic = message.channel.topic || '';
-      if (!topic.startsWith('3C-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
+      if (!topic.startsWith('3ST-TICKET:')) return sendTemp(message.channel, '❌ This is not a 3C ticket channel.', 5000);
       const topicParts = topic.split(':');
       const ownerId = topicParts[1];
       const ticketConfig = data.tickets[topicParts[2]];
@@ -1842,17 +1897,17 @@ async function handleCommandMessage(message) {
     }
     // 67 NOOB — five-minute role, nickname and message reaction.
     if(cmd==='67'){
-      const allowed=message.member.roles.cache.has('1563493318694797372')||message.member.roles.cache.has('1514265901388533782');
+      const allowed=message.member.roles.cache.has(LEVEL_67_ROLE_ID)||isOwnerMember(message.member);
       if(!allowed)return sendTemp(message.channel,'❌ You need the Level 67 or Owner role to use this.',5000);
       if(String(args[0]||'').toLowerCase()!=='give'||!target)return sendTemp(message.channel,`Usage: ${prefix}67 give @user`,5000);
       if(target.id===message.author.id)return sendTemp(message.channel,'❌ You cannot 67 yourself.',5000);
-      const me=message.guild.members.me,role=message.guild.roles.cache.get('1565764777010139346');
+      const me=message.guild.members.me,role=message.guild.roles.cache.get(GIFT_6777_ROLE_ID);
       if(!me?.permissions.has(PermissionsBitField.Flags.ManageRoles)||!me.permissions.has(PermissionsBitField.Flags.ManageNicknames))
         return sendTemp(message.channel,'❌ I need Manage Roles and Manage Nicknames permissions.',6000);
       if(!role||me.roles.highest.position<=role.position)return sendTemp(message.channel,'❌ I cannot manage the configured 67 NOOBBB role. Check its position above the bot.',6000);
       const effectKey=key(message.guild.id,target.id),existing=data.active67?.[effectKey];
       try{
-        if(!existing)data.active67[effectKey]={previousNickname:target.nickname,hadRole:target.roles.cache.has('1565764777010139346'),expiresAt:Date.now()+300000};
+        if(!existing)data.active67[effectKey]={previousNickname:target.nickname,hadRole:target.roles.cache.has(GIFT_6777_ROLE_ID),expiresAt:Date.now()+300000};
         else data.active67[effectKey].expiresAt=Date.now()+300000;
         await target.roles.add(role,`67 effect activated by ${message.author.tag}`);
         await target.setNickname('677 NOOB LOL',`67 effect activated by ${message.author.tag}`);
@@ -1870,7 +1925,7 @@ async function handleCommandMessage(message) {
       await dmModeration(target.user, message.guild, 'kick', message.author, reason);
       await cleanupRecentTargetMessages(message.guild,target.id,message.channel);
       await target.kick(reason || undefined);
-      recordStaffAction(message.guild.id, message.author.id, 'kick', target.id, reason, '3c');
+      recordStaffAction(message.guild.id, message.author.id, 'kick', target.id, reason, '3st');
       await auditLog(message.guild, '👢 Member Kicked', `${target.user} was kicked by ${message.author}.`, 0xE67E22, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
@@ -1886,7 +1941,7 @@ async function handleCommandMessage(message) {
       await dmModeration(target.user, message.guild, 'ban', message.author, reason);
       await cleanupRecentTargetMessages(message.guild,target.id,message.channel);
       await target.ban({ reason: reason || undefined });
-      recordStaffAction(message.guild.id, message.author.id, 'ban', target.id, reason, '3c');
+      recordStaffAction(message.guild.id, message.author.id, 'ban', target.id, reason, '3st');
       await auditLog(message.guild, '🔨 Member Banned', `${target.user} was banned by ${message.author}.`, 0xE74C3C, [
         { name: 'Reason', value: reason || 'No reason' },
       ]);
@@ -1901,7 +1956,7 @@ async function handleCommandMessage(message) {
       const ban = await message.guild.bans.fetch(id).catch(() => null);
       if (!ban) return sendTemp(message.channel, '❌ That member is not banned.', 5000);
       await message.guild.members.unban(id, `Unbanned by ${message.author.tag}`);
-      recordStaffAction(message.guild.id, message.author.id, 'unban', id, `Unbanned by ${message.author.tag}`, '3c');
+      recordStaffAction(message.guild.id, message.author.id, 'unban', id, `Unbanned by ${message.author.tag}`, '3st');
       return sendTemp(message.channel, `✅ Unbanned **${ban.user.tag}**.`, 6000);
     }
 
@@ -1934,7 +1989,7 @@ async function handleCommandMessage(message) {
 
       const reportEmbed = new EmbedBuilder()
         .setColor(0xED4245)
-        .setTitle('🚨 3C User Report')
+        .setTitle('🚨 3ST User Report')
         .addFields(
           { name: 'Reported By', value: `${message.author} (${message.author.tag})`, inline: true },
           { name: 'Reported Member', value: `${target} (${target.user.tag})`, inline: true },
@@ -1990,12 +2045,12 @@ async function handleCommandMessage(message) {
       await reportChannel.send({
         embeds: [new EmbedBuilder()
           .setColor(0xED4245)
-          .setTitle('🚨 3C User Report Log Connected')
+          .setTitle('🚨 3ST User Report Log Connected')
           .setDescription('User reports will be logged here with the reporter, reported member and reason.')
           .addFields({ name: 'Channel', value: String(reportChannel) })
           .setTimestamp()]
       }).catch(() => {});
-      return sendTemp(message.channel, `✅ 3C User Reports are now connected to ${reportChannel}.`, 6000);
+      return sendTemp(message.channel, `✅ 3ST User Reports are now connected to ${reportChannel}.`, 6000);
     }
 
     // AUDIT LOG SETUP — connect to an EXISTING channel; never create one.
@@ -2028,11 +2083,11 @@ async function handleCommandMessage(message) {
         embeds: [new EmbedBuilder()
           .setColor(0x5865F2)
           .setTitle('🛡️ 3C Audit Log Connected')
-          .setDescription('This existing channel is now the 3C bot audit-log destination.')
+          .setDescription('This existing channel is now the 3ST bot audit-log destination.')
           .addFields({ name: 'Channel', value: String(auditChannel) })
           .setTimestamp()]
       }).catch(() => {});
-      return sendTemp(message.channel, `✅ 3C audit logs are now connected to ${auditChannel}.`, 6000);
+      return sendTemp(message.channel, `✅ 3ST audit logs are now connected to ${auditChannel}.`, 6000);
     }
     // HELP / COMMANDS
     if (cmd === 'commands') {
@@ -2112,14 +2167,15 @@ async function handleCommandMessage(message) {
     }
 
 
-    if (cmd === 'setwelcome' || cmd === 'setgoodbye') {
+    if (cmd === 'setwelcome' || cmd === 'setgoodbye' || cmd === 'settryout') {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need Manage Server to configure this.', 5000);
       const channel = message.mentions.channels.first() || message.guild.channels.cache.get(args[0]?.replace(/[<#>]/g, ''));
       if (!channel || !channel.isTextBased()) return sendTemp(message.channel, 'Usage: ' + prefix + cmd + ' #channel', 5000);
       if (cmd === 'setwelcome') data.welcomeChannels[message.guild.id] = channel.id;
-      else data.goodbyeChannels[message.guild.id] = channel.id;
+      else if (cmd === 'setgoodbye') data.goodbyeChannels[message.guild.id] = channel.id;
+      else data.tryoutChannels[message.guild.id] = channel.id;
       saveData();
-      return sendTemp(message.channel, '✅ ' + (cmd === 'setwelcome' ? 'Welcome' : 'Goodbye') + ' messages will be sent in ' + channel + '.', 5000);
+      return sendTemp(message.channel, '✅ ' + (cmd === 'setwelcome' ? 'Welcome' : cmd === 'setgoodbye' ? 'Goodbye' : 'Tryout') + (cmd === 'settryout' ? ' replies will point to ' : ' messages will be sent in ') + channel + '.', 5000);
     }
 
     if (cmd === 'invites') {
@@ -2134,7 +2190,7 @@ async function handleCommandMessage(message) {
       if (bots) lines.push('**Bots:** ' + bots);
       if (fake) lines.push('**Suspicious:** ' + fake);
       if (left) lines.push('**Left:** ' + left);
-      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📨 Invite Statistics').setDescription(member.toString() + '\n' + lines.join('\n')).setFooter({ text: '3C Bot • Tracked since invite tracking was enabled' }).setTimestamp();
+      const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📨 Invite Statistics').setDescription(member.toString() + '\n' + lines.join('\n')).setFooter({ text: '3ST Bot • Tracked since invite tracking was enabled' }).setTimestamp();
       return message.channel.send({ embeds: [embed] });
     }
 
@@ -2157,7 +2213,7 @@ async function handleCommandMessage(message) {
     if (cmd === 'birthday' || cmd === 'rbirthday') {
       if(!hasAnyRoleOrAdmin(message.member,[STAFF_ROLE_ID]))return sendTemp(message.channel,'❌ Staff only.',5000);
       if(!target)return sendTemp(message.channel,'Usage: '+prefix+cmd+' @user',5000);
-      const roleId='1563579108779098244';
+      const roleId=BIRTHDAY_ROLE_ID;
       if(cmd==='rbirthday'){
         const existing=(data.activeTimedReactions[key(message.guild.id,target.id)]||[]).find(x=>x.kind==='birthday');
         if(existing)await expireTimedReaction(message.guild,target.id,'birthday');
@@ -2167,7 +2223,7 @@ async function handleCommandMessage(message) {
       if(!message.guild.members.me?.permissions.has(PermissionsBitField.Flags.ManageRoles))return sendTemp(message.channel,'❌ I need Manage Roles.',5000);
       const role=message.guild.roles.cache.get(roleId);if(!role)return sendTemp(message.channel,'❌ Birthday role not found.',5000);
       await target.roles.add(role,'Birthday effect by '+message.author.tag);
-      const birthdayEmoji=message.guild.emojis.cache.find(e=>e.name.toLowerCase()==='birthday_cake')||'🎂';
+      const birthdayEmoji=message.guild.emojis.cache.find(e=>e.name==='Birthday_Cake')||'🎂';
       scheduleTimedReaction(message.guild,target.id,{kind:'birthday',emoji:String(birthdayEmoji),roleId:roleId,expiresAt:Date.now()+86400000});
       return sendTemp(message.channel,'🎂 '+target+' has the birthday role and reactions for 24 hours.',5000);
     }
@@ -2176,14 +2232,14 @@ async function handleCommandMessage(message) {
       if(!target)return sendTemp(message.channel,'Usage: '+prefix+cmd+' @user'+(cmd==='reactset'?' emoji duration':''),5000);
       let kind,emoji,roleId=null,duration;
       if(cmd==='6777'){
-        if(!hasAnyRoleOrAdmin(message.member,['1563493318694797372']))return sendTemp(message.channel,'❌ Only Level 67 members can use this.',5000);
-        kind='6777';emoji=message.guild.emojis.cache.find(e=>e.name==='6777');if(!emoji)return sendTemp(message.channel,'❌ I could not find the 6777 emoji in this server.',5000);roleId='1565764777010139346';duration=300000;
+        if(!hasAnyRoleOrAdmin(message.member,[LEVEL_67_ROLE_ID]))return sendTemp(message.channel,'❌ Only Level 67 members can use this.',5000);
+        kind='6777';emoji=message.guild.emojis.cache.find(e=>e.name==='6777');if(!emoji)return sendTemp(message.channel,'❌ I could not find the 6777 emoji in this server.',5000);roleId=GIFT_6777_ROLE_ID;duration=300000;
       }else if(cmd==='poop'){
         if(!hasAnyRoleOrAdmin(message.member,[STAFF_ROLE_ID]))return sendTemp(message.channel,'❌ Staff only.',5000);
         const wait=cooldownSeconds(message.guild.id,message.author.id,'poop');if(wait)return sendTemp(message.channel,'⏳ Wait '+wait+'s before using ?poop again.',4000);
-        kind='poop';emoji='💩';roleId='1562791606581469314';duration=300000;
+        kind='poop';emoji='💩';roleId=POOP_ROLE_ID;duration=300000;
       }else{
-        const allowed=['1514268943446179881','1514268813938397237','1556940387728228424','1558562402130337883','1514268254477226044','1515348156265664685','1561766518612697099','1514265901388533782','1539966630451220560'];
+        const allowed=OWNER_ROLE_IDS.concat([STAFF_ROLE_ID, LEVEL_67_ROLE_ID, BLEHHH_BOOSTER_ROLE_ID, BLEHHH_BOOSTER_TOO_ROLE_ID]);
         if(!hasAnyRoleOrAdmin(message.member,allowed))return sendTemp(message.channel,'you dont have permission to use this',5000);
         const rest=args.filter(x=>!/^<@!?\d+>$/.test(x));
         emoji=rest[0];duration=parseDuration(rest[1]);
@@ -2222,10 +2278,10 @@ client.on('interactionCreate', async (interaction) => {
       if(action==='cancel')return interaction.update({content:'Cleanup cancelled.',embeds:[],components:[]});
       await interaction.deferReply({ephemeral:true});
       await performEmergencyCleanup(interaction.guild);
-      return interaction.editReply('✅ Cleanup completed. 3C Bot messages were removed and bot interactions are disabled. Your messages and saved bot records were preserved.');
+      return interaction.editReply('✅ Cleanup completed. 3ST Bot messages were removed and bot interactions are disabled. Your messages and saved bot records were preserved.');
     }
     if(interaction.guildId&&data.emergencyCleanup?.[interaction.guildId])
-      return interaction.reply({content:'3C Bot interactions are disabled in this server.',ephemeral:true}).catch(()=>{});
+      return interaction.reply({content:'3ST Bot interactions are disabled in this server.',ephemeral:true}).catch(()=>{});
     if(interaction.isChatInputCommand()) return await dispatchSlashCommand(interaction);
     if (interaction.isButton() && interaction.customId.startsWith('commands:')) {
       const [, action, currentRaw] = interaction.customId.split(':');
@@ -2267,7 +2323,7 @@ client.on('interactionCreate', async (interaction) => {
       if(!channel||![ChannelType.GuildText,ChannelType.GuildAnnouncement].includes(channel.type))
         return interaction.reply({content:'❌ Choose a server text or announcement channel.',ephemeral:true});
       try{
-        const webhook=await channel.createWebhook({name,avatar:avatar||undefined,reason:`Webhook created by ${interaction.user.tag} using 3C Bot Webhook Studio`});
+        const webhook=await channel.createWebhook({name,avatar:avatar||undefined,reason:`Webhook created by ${interaction.user.tag} using 3ST Bot Webhook Studio`});
         if(!webhook.token)throw new Error('Discord did not return a webhook token.');
         if(!data.webhooks[interaction.guildId])data.webhooks[interaction.guildId]={};
         data.webhooks[interaction.guildId][webhook.id]={id:webhook.id,token:webhook.token,channelId,name,createdBy:interaction.user.id,createdAt:Date.now(),lastMessageId:null};
@@ -2311,7 +2367,7 @@ client.on('interactionCreate', async (interaction) => {
         new ButtonBuilder().setCustomId(`webhook:schedule:${id}`).setLabel('Schedule').setStyle(ButtonStyle.Secondary)
       );
       const deleteRow=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`webhook:delete:${id}`).setLabel('Delete').setStyle(ButtonStyle.Danger));
-      return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}\n${record.token?'3C Bot can compose and edit messages.':'Existing webhook: settings can be edited; composing needs its original token.'}`,components:[row,deleteRow]});
+      return interaction.update({content:`**${record.name}** • <#${record.channelId}>\nWebhook ID: \`${id}\`\nLast message: ${record.lastMessageId?record.lastMessageId:'None'}\n${record.token?'3ST Bot can compose and edit messages.':'Existing webhook: settings can be edited; composing needs its original token.'}`,components:[row,deleteRow]});
     }
 
     if(interaction.isButton()&&interaction.customId.startsWith('webhook:editmeta:')){
@@ -2332,7 +2388,7 @@ client.on('interactionCreate', async (interaction) => {
       if(!channel||![ChannelType.GuildText,ChannelType.GuildAnnouncement].includes(channel.type))return interaction.reply({content:'❌ Choose a text or announcement channel in this server.',ephemeral:true});
       try{
         const fresh=await interaction.guild.fetchWebhooks(),selected=fresh.get(id);if(!selected)throw new Error('Webhook not found');
-        await selected.edit({name,channel:channel.id,...(avatar?{avatar}:{}),reason:'Webhook edited by '+interaction.user.tag+' in 3C Bot'});
+        await selected.edit({name,channel:channel.id,...(avatar?{avatar}:{}),reason:'Webhook edited by '+interaction.user.tag+' in 3ST Bot'});
         const record=data.webhooks[interaction.guildId]?.[id]||{id:id,token:null};
         Object.assign(record,{id:id,name:name,channelId:channel.id});if(!data.webhooks[interaction.guildId])data.webhooks[interaction.guildId]={};data.webhooks[interaction.guildId][id]=record;saveData();
         return interaction.reply({content:'✅ Updated **'+name+'** and moved it to <#'+channel.id+'>.',ephemeral:true});
@@ -2519,7 +2575,7 @@ client.on('interactionCreate', async (interaction) => {
       const id=interaction.customId.split(':')[2],record=findSavedWebhook(id);
       if(!record)return interaction.reply({content:'❌ Saved webhook not found.',ephemeral:true});
       try{
-        await new WebhookClient({id:record.id,token:record.token}).delete('Deleted from 3C Bot Webhook Studio');
+        await new WebhookClient({id:record.id,token:record.token}).delete('Deleted from 3ST Bot Webhook Studio');
         delete data.webhooks[interaction.guildId][id];saveData();
         return interaction.update({content:`✅ Webhook **${record.name}** deleted.`,components:[]});
       }catch(error){console.error('Webhook delete error:',error);return interaction.update({content:'❌ Could not delete the webhook. It may already have been removed.',components:[]});}
@@ -2635,7 +2691,7 @@ client.on('interactionCreate', async (interaction) => {
         const ticketConfig = data.tickets[ticketId];
         const parentGroup = ticketConfig.panelGroupId ? data.ticketPanels[ticketConfig.panelGroupId] : null;
         const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
-        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3C Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
+        embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3ST Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
         return embed;
       };
       config.panelChannelId=interaction.channel.id;
@@ -2648,7 +2704,7 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(group.embedColor ?? 0x232428)
           .setTitle(group.panelTitle || 'General Support 📬')
           .setDescription(group.panelDescription || 'Choose a ticket type below and our team will help you.')
-          .setFooter({ text: group.footerText || '3C Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
+          .setFooter({ text: group.footerText || '3ST Bot ~ Built for Rivals. United by 3C.', iconURL: client.user.displayAvatarURL() });
         const panelButtons = configuredIds.map(buildTicketButton);
         const panelRows = [];
         for (let i = 0; i < panelButtons.length; i += 5) panelRows.push(new ActionRowBuilder().addComponents(...panelButtons.slice(i, i + 5)));
@@ -2691,7 +2747,7 @@ client.on('interactionCreate', async (interaction) => {
       if (interaction.user.id !== ownerId && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({ content: '❌ Only the panel creator or Manage Server can edit this.', ephemeral: true });
       const currentTitle = group?.panelTitle || config?.title || 'General Support 📬';
       const currentDescription = group?.panelDescription || config?.description || 'Choose a ticket type below and our team will help you.';
-      const currentFooter = group?.footerText || config?.footerText || '3C Bot ~ Built for Rivals. United by 3C.';
+      const currentFooter = group?.footerText || config?.footerText || '3ST Bot ~ Built for Rivals. United by 3C.';
       const modal = new ModalBuilder().setCustomId(`ticket:panelmodal:${panelId}`).setTitle('Edit Ticket Panel Embed');
       const f = (field, label, value, style, max) => new TextInputBuilder().setCustomId(field).setLabel(label).setValue(String(value).slice(0,max)).setStyle(style).setRequired(true).setMaxLength(max);
       modal.addComponents(
@@ -2754,7 +2810,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith('ticket:create:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket panel no longer exists.',ephemeral:true});
-      const existing=interaction.guild.channels.cache.find(c=>{ if(c.type!==ChannelType.GuildText||!c.topic?.startsWith('3C-TICKET:')) return false; const parts=c.topic.split(':'); return parts[1]===interaction.user.id && (!parts[2] || parts[2]===id); });
+      const existing=interaction.guild.channels.cache.find(c=>{ if(c.type!==ChannelType.GuildText||!c.topic?.startsWith('3ST-TICKET:')) return false; const parts=c.topic.split(':'); return parts[1]===interaction.user.id && (!parts[2] || parts[2]===id); });
       if(existing) return interaction.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
       const category=interaction.guild.channels.cache.get(config.categoryId);
       if (!config.tagIds) config.tagIds = config.tagId ? [config.tagId] : [];
@@ -2764,7 +2820,7 @@ client.on('interactionCreate', async (interaction) => {
       const safeUser=String(interaction.user.username||interaction.user.id).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,25)||interaction.user.id;
       const safeName=`${safeBase}-ticket-${safeUser}`.slice(0,95);
       let channel;
-      try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3C-TICKET:${interaction.user.id}:${id}`,permissionOverwrites:[
+      try{ channel=await interaction.guild.channels.create({name:safeName,type:ChannelType.GuildText,parent:category.id,topic:`3ST-TICKET:${interaction.user.id}:${id}`,permissionOverwrites:[
         {id:interaction.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},
         {id:interaction.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.AttachFiles]},
         ...((config.tagIds || (config.tagId ? [config.tagId] : [])).filter(tagId => tagId && tagId !== interaction.user.id && tagId !== client.user.id && tagId !== interaction.guild.roles.everyone.id).map((tagId, i) => {
@@ -2775,7 +2831,7 @@ client.on('interactionCreate', async (interaction) => {
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3C Bot ~ Built for Rivals. United by 3C.', iconURL:client.user.displayAvatarURL()});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3ST Bot ~ Built for Rivals. United by 3C.', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
       const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
@@ -2787,7 +2843,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isButton() && interaction.customId==='ticket:close') {
-      const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
+      const topic=interaction.channel?.topic||''; if(!topic.startsWith('3ST-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
       const topicParts=topic.split(':');
       const ownerId=topicParts[1], ticketConfig=data.tickets[topicParts[2]];
       const tagIds=ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
@@ -2802,7 +2858,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isModalSubmit() && interaction.customId==='ticket:closemodal') {
-      const topic=interaction.channel?.topic||''; if(!topic.startsWith('3C-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
+      const topic=interaction.channel?.topic||''; if(!topic.startsWith('3ST-TICKET:')) return interaction.reply({content:'❌ This is not a ticket.',ephemeral:true});
       const topicParts=topic.split(':');
       const ownerId=topicParts[1], ticketConfig=data.tickets[topicParts[2]];
       const tagIds=ticketConfig?.tagIds || (ticketConfig?.tagId ? [ticketConfig.tagId] : []);
