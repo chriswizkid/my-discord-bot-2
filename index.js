@@ -2273,7 +2273,8 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if(interaction.isButton()&&interaction.customId.startsWith('emergency:')){
       const [,action,guildId,allowedUserId]=interaction.customId.split(':');
-      if(interaction.user.id!==allowedUserId||!EMERGENCY_CLEANUP_ALLOWED.has(interaction.user.id)||interaction.guildId!==guildId)
+      const confirmer=await interaction.guild.members.fetch(interaction.user.id).catch(()=>null);
+      if(interaction.user.id!==allowedUserId||(interaction.user.id!==interaction.guild.ownerId&&!isOwnerMember(confirmer))||interaction.guildId!==guildId)
         return interaction.reply({content:'❌ You are not authorized to confirm this cleanup.',ephemeral:true});
       if(action==='cancel')return interaction.update({content:'Cleanup cancelled.',embeds:[],components:[]});
       await interaction.deferReply({ephemeral:true});
