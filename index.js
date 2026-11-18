@@ -1151,14 +1151,30 @@ client.once('ready', async () => {
   client.user.setPresence({ activities: [{ name: 'With chris_wizkid', type: 0 }], status: 'online' });
 });
 
-// React to every message from a member currently holding the Blehhh role.
+// React to every new message from a member currently holding the Blehhh role.
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
-  const effects=(data.activeTimedReactions||{})[key(message.guild.id,message.author.id)]||[];
-  for(const effect of effects){if(effect.expiresAt>Date.now())await message.react(effect.emoji).catch(()=>{});}
-  if (!message.member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
+
+  const effects = (data.activeTimedReactions || {})[key(message.guild.id, message.author.id)] || [];
+  for (const effect of effects) {
+    if (effect.expiresAt > Date.now()) await message.react(effect.emoji).catch(() => {});
+  }
+
+  // Fetch the member if Discord did not attach a populated GuildMember to this message.
+  const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+  if (!member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
+
+  // Use the server's custom :blehhh: emoji, not the built-in 😛 fallback.
   const emoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
-  if (emoji) await message.react(emoji).catch(() => {});
+  if (!emoji) {
+    console.warn('[BLEHHH] Custom emoji named "blehhh" was not found in the 3ST emoji cache.');
+    return;
+  }
+  try {
+    await message.react(emoji);
+  } catch (error) {
+    console.error('[BLEHHH] Could not react to member message:', error.message);
+  }
 });
 
 client.on('messageDelete', async (message) => {
