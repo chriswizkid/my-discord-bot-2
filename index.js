@@ -1292,6 +1292,39 @@ async function handleCommandMessage(message) {
         return sendTemp(message.channel, '❌ I could not update that member’s level role. Check role permissions and hierarchy.', 7000);
       }
     }
+    // Role-specific self-service grants. Invokers do not need Manage Roles;
+    // the bot still needs Manage Roles and must be above the target role.
+    if (cmd === 'artist' || cmd === 'pro') {
+      const grantConfig = cmd === 'artist'
+        ? { allowedRoleIds: ['1572325871518228510'], targetRoleId: '1572325564201566359', label: 'Artist' }
+        : { allowedRoleIds: ['1572532718288379974', '1572532350766555136'], targetRoleId: '1572532718288379974', label: 'Pro Player' };
+      const invoker = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+      if (!invoker || !grantConfig.allowedRoleIds.some(roleId => invoker.roles.cache.has(roleId))) {
+        return sendTemp(message.channel, `❌ You need the authorized role to give the **${grantConfig.label}** role.`, 5000);
+      }
+      if (!target) return sendTemp(message.channel, `Usage: ${prefix}${cmd} @user`, 5000);
+      if (target.user.bot) return sendTemp(message.channel, '❌ You cannot assign this role to a bot.', 5000);
+      const grantRole = message.guild.roles.cache.get(grantConfig.targetRoleId);
+      const botMember = message.guild.members.me;
+      if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+        return sendTemp(message.channel, '❌ The bot needs **Manage Roles** permission to assign roles.', 6000);
+      }
+      if (!grantRole || grantRole.managed || botMember.roles.highest.position <= grantRole.position) {
+        return sendTemp(message.channel, `❌ I cannot manage the **${grantConfig.label}** role. Move my bot role above it.`, 7000);
+      }
+      try {
+        if (target.roles.cache.has(grantRole.id)) {
+          return sendTemp(message.channel, `ℹ️ ${target} already has the **${grantConfig.label}** role.`, 5000);
+        }
+        await target.roles.add(grantRole, `${grantConfig.label} role granted by ${message.author.tag}`);
+        await auditLog(message.guild, `🎖️ ${grantConfig.label} Role Assigned`, `${grantRole} was assigned to ${target} by ${message.author}.`, 0x57F287);
+        return sendTemp(message.channel, `✅ Gave the **${grantConfig.label}** role to ${target}.`, 5000);
+      } catch (error) {
+        console.error(`${grantConfig.label} role command failed:`, error);
+        return sendTemp(message.channel, `❌ I could not assign the **${grantConfig.label}** role. Check the bot's role position and permissions.`, 7000);
+      }
+    }
+
     // FUN GIF REACTIONS
     if (cmd === 'hug' || cmd === 'slap') {
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}${cmd} @user`, 5000);
