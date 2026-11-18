@@ -18,7 +18,7 @@ Discord.js v14 bot with the same moderation, AFK, snipes, tickets, roles, server
 - Grant **Manage Server** (Manage Guild) if you want invite tracking to identify who invited new members. Also enable the **Server Members Intent** and **Message Content Intent**.
 
 ## Discord Developer Portal
-Enable **Message Content Intent** and **Server Members Intent**. Invite the bot with the permissions it needs: View Channels, Send Messages, Embed Links, Read Message History, Manage Messages, Manage Channels, Manage Roles, Manage Nicknames, Moderate Members, Kick Members and Ban Members.
+Enable **Message Content Intent** and **Server Members Intent**. Invite the bot with the permissions it needs: View Channels, Send Messages, Embed Links, Attach Files, Read Message History, Add Reactions, Manage Messages, Manage Channels, Manage Server (for invite tracking), Manage Webhooks, Manage Roles, Manage Nicknames, Moderate Members, Kick Members and Ban Members.
 Put the bot's highest role above every role it needs to manage.
 
 Set the application description manually in the Developer Portal to:
