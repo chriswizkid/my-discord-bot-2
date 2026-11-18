@@ -5,14 +5,14 @@ Discord.js v14 bot with the same moderation, AFK, snipes, tickets, roles, server
 ## Run locally
 1. Install Node.js 20+.
 2. Copy `.env.example` to `.env` and put the new bot token in `DISCORD_TOKEN`.
-3. Keep your existing `MONGODB_URI` if you want to retain the previous bot's stored configuration and data. The bot stores state in the `bot_state` collection, document `_id: main`.
+3. Set `MONGODB_URI` to your MongoDB connection string and keep `MONGODB_DB_NAME=3st_bot`. This keeps 3ST data separate from the old bot's `bot_state` document so the two bots cannot overwrite each other's data.
 4. Run `npm install`.
 5. Run `npm start`.
 
 ## ModVC
 - Build command: `npm install`
 - Start command: `npm start`
-- Environment variables: `DISCORD_TOKEN`, and optionally `MONGODB_URI`.
+- Environment variables: `DISCORD_TOKEN`, `MONGODB_URI`, and `MONGODB_DB_NAME=3st_bot`.
 - Ensure the start command uses lowercase `npm`.
 - The bot is configured for server ID `1564309904704020560` only.
 - Grant **Manage Server** (Manage Guild) if you want invite tracking to identify who invited new members. Also enable the **Server Members Intent** and **Message Content Intent**.
