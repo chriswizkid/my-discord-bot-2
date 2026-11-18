@@ -154,7 +154,10 @@ const POOP_ROLE_ID = '1572502299199283240';
 const BIRTHDAY_ROLE_ID = '1572506993225244763';
 
 function isOwnerMember(member) {
-  return Boolean(member?.id && OWNER_USER_IDS.includes(member.id));
+  return Boolean(member?.id && (
+    OWNER_USER_IDS.includes(member.id) ||
+    member.id === member.guild?.ownerId
+  ));
 }
 
 function isLevel30Member(member) {
@@ -1299,8 +1302,8 @@ async function handleCommandMessage(message) {
         ? { allowedRoleIds: ['1572325871518228510'], targetRoleId: '1572325564201566359', label: 'Artist' }
         : { allowedRoleIds: ['1572532718288379974', '1572532350766555136'], targetRoleId: '1572532718288379974', label: 'Pro Player' };
       const invoker = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
-      if (!invoker || !grantConfig.allowedRoleIds.some(roleId => invoker.roles.cache.has(roleId))) {
-        return sendTemp(message.channel, `❌ You need the authorized role to give the **${grantConfig.label}** role.`, 5000);
+      if (!invoker || (!isOwnerMember(invoker) && !grantConfig.allowedRoleIds.some(roleId => invoker.roles.cache.has(roleId)))) {
+        return sendTemp(message.channel, `❌ You need the authorized role or 3ST owner access to give the **${grantConfig.label}** role.`, 5000);
       }
       if (!target) return sendTemp(message.channel, `Usage: ${prefix}${cmd} @user`, 5000);
       if (target.user.bot) return sendTemp(message.channel, '❌ You cannot assign this role to a bot.', 5000);
