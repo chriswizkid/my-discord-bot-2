@@ -168,7 +168,7 @@ function isStaffMember(member) {
   if (!member) return false;
   return Boolean(member.permissions?.has(PermissionsBitField.Flags.Administrator) || isOwnerMember(member) || member.roles?.cache?.has(STAFF_ROLE_ID));
 }
-function isAdministrator(member) { return Boolean(member?.permissions?.has(PermissionsBitField.Flags.Administrator)); }
+function isAdministrator(member) { return Boolean(isOwnerMember(member) || member?.permissions?.has(PermissionsBitField.Flags.Administrator)); }
 function hasAnyRoleOrAdmin(member, roleIds) { return isAdministrator(member) || isOwnerMember(member) || roleIds.some(id => member?.roles?.cache?.has(id)); }
 function cooldownSeconds(guildId,userId,command,ms=30000) {
   const k=guildId+':'+userId+':'+command,now=Date.now(),until=commandCooldowns.get(k)||0;
@@ -285,7 +285,7 @@ function parseTime(input) {
   if (!ms) return null;
   return ms;
 }
-function hasPerm(member, perm) { return member.permissions.has(perm); }
+function hasPerm(member, perm) { return Boolean(isOwnerMember(member) || member?.permissions?.has(perm)); }
 function canAct(actor, target) {
   if (!target) return false;
   if (target.id === actor.id) return false;
@@ -404,9 +404,8 @@ async function performEmergencyCleanup(guild) {
   return internalDeleted;
 }
 async function sendTemp(channel, content, ms = 7000) {
-  const m = await channel.send(content).catch(() => null);
-  if (m) setTimeout(() => m.delete().catch(() => {}), ms);
-  return m;
+  // Keep bot replies visible; only explicit purge removes bot messages.
+  return channel.send(content).catch(() => null);
 }
 
 async function auditLog(guild, title, description, color = 0x5865F2, fields = []) {
@@ -1459,7 +1458,7 @@ async function handleCommandMessage(message) {
       }
 
       await safeDelete(message);
-      return message.channel.send('🤫 whisper sent').then(m => setTimeout(() => m.delete().catch(() => {}), 4000));
+      return message.channel.send('🤫 whisper sent');
     }
 
     // BLEHHH
@@ -2097,7 +2096,7 @@ async function handleCommandMessage(message) {
       data.reportCooldowns[cooldownKey] = until;
       saveData();
       await safeDelete(message);
-      return message.channel.send('report successfully submitted').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+      return message.channel.send('report successfully submitted');
     }
 
     // REPORT LOG SETUP — connect to an existing channel only; never create a channel.
