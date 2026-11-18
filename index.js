@@ -1527,9 +1527,16 @@ async function handleCommandMessage(message) {
 
         await target.roles.add(blehhhRole, `Blehhh by ${message.author.tag} for ${prettyDuration(duration)}`);
 
-        const blehhhEmoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
-        if (blehhhEmoji) await message.react(blehhhEmoji).catch(() => {});
-        else await message.react('😛').catch(() => {});
+        const serverEmojis = await message.guild.emojis.fetch().catch(error => {
+          console.error('[BLEHHH COMMAND] Could not fetch server emojis:', error.message);
+          return null;
+        });
+        const blehhhEmoji = serverEmojis?.find(e => e.name === 'blehhh_emoji');
+        if (blehhhEmoji) {
+          await message.react(blehhhEmoji).catch(error => console.error('[BLEHHH COMMAND] Could not react with :blehhh_emoji::', error.message));
+        } else {
+          console.error('[BLEHHH COMMAND] Emoji "blehhh_emoji" was not found; no fallback emoji will be used.');
+        }
 
         const timer = setTimeout(async () => {
           blehhhTimers.delete(timerKey);
