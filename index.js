@@ -1150,29 +1150,40 @@ client.once('ready', async () => {
   client.user.setPresence({ activities: [{ name: 'With chris_wizkid', type: 0 }], status: 'online' });
 });
 
-// React to every new message from a member currently holding the Blehhh role.
+// React to every new message from members with an active timed effect or the Blehhh role.
 client.on('messageCreate', async (message) => {
   if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
 
+  // Timed reactions (Birthday / Poop) are independent of the Blehhh role.
   const effects = (data.activeTimedReactions || {})[key(message.guild.id, message.author.id)] || [];
   for (const effect of effects) {
-    if (effect.expiresAt > Date.now()) await message.react(effect.emoji).catch(() => {});
+    if (effect.expiresAt > Date.now() && effect.emoji) {
+      try { await message.react(effect.emoji); }
+      catch (error) { console.error('[TIMED REACTION] Could not react:', effect.kind, error.message); }
+    }
   }
 
-  // Fetch the member if Discord did not attach a populated GuildMember to this message.
-  const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+  // Fetch the current member and emoji list to avoid stale/missing cache entries.
+  const member = await message.guild.members.fetch(message.author.id).catch(error => {
+    console.error('[BLEHHH] Could not fetch message author member:', error.message);
+    return null;
+  });
   if (!member?.roles.cache.has(BLEHHH_ROLE_ID)) return;
 
-  // Use the server's custom :blehhh: emoji, not the built-in 😛 fallback.
-  const emoji = message.guild.emojis.cache.find(e => e.name === 'blehhh');
+  const emojis = await message.guild.emojis.fetch().catch(error => {
+    console.error('[BLEHHH] Could not fetch server emojis:', error.message);
+    return null;
+  });
+  const emoji = emojis?.find(e => e.name === 'blehhh_emoji');
   if (!emoji) {
-    console.warn('[BLEHHH] Custom emoji named "blehhh" was not found in the 3ST emoji cache.');
+    console.error('[BLEHHH] Server emoji "blehhh_emoji" was not found. Check the exact emoji name and bot access.');
     return;
   }
+
   try {
     await message.react(emoji);
   } catch (error) {
-    console.error('[BLEHHH] Could not react to member message:', error.message);
+    console.error('[BLEHHH] Could not react to message:', error.message);
   }
 });
 
