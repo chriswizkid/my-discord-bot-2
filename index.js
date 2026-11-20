@@ -1247,6 +1247,7 @@ async function handleCommandMessage(message) {
   }
   if(message.content.trim()===EMERGENCY_CLEANUP_COMMAND){
     if(message.author.id!==message.guild.ownerId&&!isOwnerMember(message.member))return;
+    await safeDelete(message);
     const confirm=new ButtonBuilder().setCustomId(`emergency:confirm:${message.guild.id}:${message.author.id}`).setLabel('Confirm Cleanup').setStyle(ButtonStyle.Danger).setEmoji('🧹');
     const cancel=new ButtonBuilder().setCustomId(`emergency:cancel:${message.guild.id}:${message.author.id}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary);
     return message.channel.send({
