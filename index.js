@@ -1284,8 +1284,10 @@ async function handleCommandMessage(message) {
   const args = tokenize(body);
   const cmd = args.shift().toLowerCase();
 
-  const deleteCommand = ['warn','kick','ban','mute'].includes(cmd);
-  if (deleteCommand) await safeDelete(message);
+  // Remove every prefix-command invocation, but let purge handle its own command
+  // so it can count/delete the requested messages and then clean up its confirmation.
+  const isPurgeCommand = ['p', 'c', 'purge'].includes(cmd);
+  if (!isPurgeCommand) await safeDelete(message);
 
   const target = message.mentions.members.first();
 
@@ -1848,6 +1850,8 @@ async function handleCommandMessage(message) {
       const fetched = await message.channel.messages.fetch({ limit: Math.min(100, amount + 1) });
       const deleted = await message.channel.bulkDelete(fetched, true);
       const deletedOtherMessages = Math.max(0, deleted.size - (deleted.has(message.id) ? 1 : 0));
+      // Explicitly remove the command too (including cases where bulkDelete skipped it).
+      await safeDelete(message);
 
       if (deletedOtherMessages > 10) {
         await auditLog(message.guild, '🧹 Messages Purged', `${message.author} purged **${deletedOtherMessages}** messages in ${message.channel}.`, 0x5865F2, [
@@ -1857,7 +1861,10 @@ async function handleCommandMessage(message) {
         ]);
       }
 
-      return sendTemp(message.channel, `🧹 Deleted **${deletedOtherMessages}** messages + the command.`, 5000);
+      const purgeConfirmation = await message.channel.send(`🧹 ${deletedOtherMessages} messages purged successfully mate.`);
+      // Purge is the one exception: its confirmation is removed after a short moment.
+      setTimeout(() => purgeConfirmation.delete().catch(() => {}), 5000);
+      return purgeConfirmation;
     }
 
     // SNIPE
