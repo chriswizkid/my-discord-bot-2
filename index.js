@@ -403,6 +403,20 @@ async function performEmergencyCleanup(guild) {
   // Keep bot configuration and ticket records intact; only Discord messages are removed.
   return internalDeleted;
 }
+function normalizeEmbedMarkdown(value) {
+  const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
+  let inCodeBlock = false;
+  return lines.map(line => {
+    if (/^\s*```/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      return line;
+    }
+    // Discord headings render in embed descriptions when # starts the line.
+    // Remove accidental indentation without changing fenced code blocks.
+    return inCodeBlock ? line : line.replace(/^[\t ]+(?=#{1,3}[\t ]+)/, '');
+  }).join('\n');
+}
+
 async function sendTemp(channel, content, ms = 7000) {
   // Keep bot replies visible; only explicit purge removes bot messages.
   return channel.send(content).catch(() => null);
@@ -2225,7 +2239,7 @@ async function handleCommandMessage(message) {
       const attachment = message.attachments.find(a => a.contentType?.startsWith('image/'));
       if (!embedText && !attachment) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text> (or attach an image)`, 7000);
       const embed = new EmbedBuilder().setColor(parseInt(color, 16));
-      if (embedText) embed.setDescription(embedText.slice(0, 4096));
+      if (embedText) embed.setDescription(normalizeEmbedMarkdown(embedText).slice(0, 4096));
       if (attachment) embed.setImage(attachment.url);
       await message.channel.send({ embeds: [embed], allowedMentions: { parse: ['users', 'roles'] } });
       return;
@@ -2538,7 +2552,7 @@ client.on('interactionCreate', async (interaction) => {
       if(isUpdate&&!record.lastMessageId)return interaction.reply({content:'❌ There is no last message to update.',ephemeral:true});
       const content=interaction.fields.getTextInputValue('webhook:content').trim();
       const title=interaction.fields.getTextInputValue('webhook:title').trim();
-      const description=interaction.fields.getTextInputValue('webhook:description').trim();
+      const description=normalizeEmbedMarkdown(interaction.fields.getTextInputValue('webhook:description'));
       const colorRaw=interaction.fields.getTextInputValue('webhook:color').trim()||'#5865F2';
       const imageLines=interaction.fields.getTextInputValue('webhook:image').split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
       const imageUrl=imageLines[0]||'';
