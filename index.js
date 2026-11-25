@@ -413,7 +413,9 @@ function normalizeEmbedMarkdown(value) {
     }
     // Discord headings render in embed descriptions when # starts the line.
     // Remove accidental indentation without changing fenced code blocks.
-    return inCodeBlock ? line : line.replace(/^[\t ]+(?=#{1,3}[\t ]+)/, '');
+    if (inCodeBlock) return line;
+    // Discord requires a space after heading markers; normalize indented and compact input.
+    return line.replace(/^[\t ]+/, '').replace(/^(#{1,3})(?=\S)/, '$1 ');
   }).join('\n');
 }
 
@@ -2752,11 +2754,26 @@ client.on('interactionCreate', async (interaction) => {
       config.tagId=tags[0].id;
       config.tagType=tags[0].type;
       saveData();
-      if(config.categoryId){
-        const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
-        return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now customize the public button label, emoji, and color.`,embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
+      const modeRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`ticket:tagmode:${id}:access`).setLabel('Access Only (No Mention)').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`ticket:tagmode:${id}:ping`).setLabel('Access + Mention').setStyle(ButtonStyle.Primary)
+      );
+      return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Should they only have ticket access, or should the bot mention them too?`,embeds:[],components:[modeRow]});
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:tagmode:')) {
+      const [, , id, mode] = interaction.customId.split(':');
+      const config = data.tickets[id];
+      if(!config || config.guildId !== interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
+      if(interaction.user.id!==config.createdBy && !interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
+      if(!['access','ping'].includes(mode)) return interaction.reply({content:'❌ Invalid ticket notification setting.',ephemeral:true});
+      config.tagMode = mode;
+      saveData();
+      if(!config.categoryId){
+        const categorySelect = new ChannelSelectMenuBuilder().setCustomId(`ticket:setupcategory:${id}`).setPlaceholder('Select Ticket Category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
+        return interaction.update({content:mode==='access'?'✅ Access only selected — no user/role mention will be sent. Now select the Ticket Category.':'✅ Access + mention selected. Now select the Ticket Category.',embeds:[],components:[new ActionRowBuilder().addComponents(categorySelect)]});
       }
-      return interaction.update({content:`✅ Selected **${tags.length}** role/user${tags.length===1?'':'s'}. Now select the Ticket Category.`,embeds:[],components:interaction.message.components});
+      const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
+      return interaction.update({content:mode==='access'?'✅ Selected users/roles will see the ticket without being mentioned.':'✅ Selected users/roles will be mentioned and can see the ticket. Now customize the public button.',embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
     }
     if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('ticket:setupcategory:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
@@ -2765,7 +2782,14 @@ client.on('interactionCreate', async (interaction) => {
       const category=interaction.guild.channels.cache.get(interaction.values[0]);
       if(!category||category.type!==ChannelType.GuildCategory) return interaction.reply({content:'❌ Select an existing Discord category.',ephemeral:true});
       config.categoryId=category.id; saveData();
-      if(!config.tagId||!config.tagType) return interaction.update({content:'✅ Category saved! Now select the Role/User to Tag.',embeds:[],components:interaction.message.components});
+      if(!config.tagIds?.length && !config.tagId) return interaction.update({content:'✅ Category saved! Now select the Role/User to Tag.',embeds:[],components:interaction.message.components});
+      if(!config.tagMode){
+        const modeRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`ticket:tagmode:${id}:access`).setLabel('Access Only (No Mention)').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`ticket:tagmode:${id}:ping`).setLabel('Access + Mention').setStyle(ButtonStyle.Primary)
+        );
+        return interaction.update({content:'✅ Category saved! Choose whether selected users/roles should only get access or also be mentioned.',embeds:[],components:[modeRow]});
+      }
       const customize = new ButtonBuilder().setCustomId(`ticket:buttonsetup:${id}`).setLabel('Customize Public Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary);
       return interaction.update({content:'✅ Ticket category saved! Now customize the public button label, emoji, and color.',embeds:[],components:[new ActionRowBuilder().addComponents(customize)]});
     }
@@ -2951,10 +2975,11 @@ client.on('interactionCreate', async (interaction) => {
       const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
-      const tagMentions=tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`);
-      const taggedUsers=tagIds.filter((tagId,i)=>tagTypes[i]==='user');
-      const taggedRoles=tagIds.filter((tagId,i)=>tagTypes[i]==='role');
-      await channel.send({content:[interaction.user.toString(),...tagMentions].join(' '),embeds:[emb],components:[new ActionRowBuilder().addComponents(close)],allowedMentions:{users:[interaction.user.id,...taggedUsers],roles:taggedRoles}});
+      const notifySelectedTags = config.tagMode !== 'access'; // Existing panels retain their prior mention behaviour.
+       const tagMentions=notifySelectedTags ? tagIds.map((tagId,i)=>tagTypes[i]==='role'?`<@&${tagId}>`:`<@${tagId}>`) : [];
+       const taggedUsers=notifySelectedTags ? tagIds.filter((tagId,i)=>tagTypes[i]==='user') : [];
+       const taggedRoles=notifySelectedTags ? tagIds.filter((tagId,i)=>tagTypes[i]==='role') : [];
+       await channel.send({content:[interaction.user.toString(),...tagMentions].join(' '),embeds:[emb],components:[new ActionRowBuilder().addComponents(close)],allowedMentions:{users:[interaction.user.id,...taggedUsers],roles:taggedRoles}});
       await auditLog(interaction.guild,'🎟️ Ticket Created',`${channel} was created by ${interaction.user}.`,0x57F287,[{name:'Ticket Name',value:config.name},{name:'Ticket Creator',value:`${interaction.user.tag} (${interaction.user.id})`},{name:'Channel',value:`${channel} (${channel.id})`},{name:'Category',value:`${category.name} (${category.id})`}]);
       return interaction.reply({content:`🎟️ ${config.name} created: ${channel}`,ephemeral:true});
     }
