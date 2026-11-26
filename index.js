@@ -2735,7 +2735,18 @@ client.on('interactionCreate', async (interaction) => {
       const name=interaction.fields.getTextInputValue('edit:name').trim(), title=interaction.fields.getTextInputValue('edit:title').trim(), description=interaction.fields.getTextInputValue('edit:description').trim(), color=hex(interaction.fields.getTextInputValue('edit:color')), embedColor=hex(interaction.fields.getTextInputValue('edit:embedcolor'));
       if(!name||!title||!description||color===null||embedColor===null) return interaction.reply({content:'❌ Check the fields and use 6-digit hex colors such as #5865F2.',ephemeral:true});
       Object.assign(c,{name,title,description,color,embedColor}); saveData();
-      return interaction.reply({content:'✅ Ticket details saved. New tickets will use the updated name, description, and colors.',ephemeral:true});
+      if(!c.panelGroupId && c.panelChannelId && c.panelMessageId) {
+        const ch=await client.channels.fetch(c.panelChannelId).catch(()=>null);
+        const msg=ch?.messages?await ch.messages.fetch(c.panelMessageId).catch(()=>null):null;
+        if(msg) {
+          const embed=new EmbedBuilder().setColor(embedColor).setTitle(title).setDescription(description)
+            .setFooter({text:c.footerText||'3ST Bot ~ Built for Rivals. United by 3ST.',iconURL:client.user.displayAvatarURL()});
+          const btn=new ButtonBuilder().setCustomId('ticket:create:'+id).setLabel(c.buttonLabel||'Open Ticket').setStyle(c.buttonStyle||ButtonStyle.Primary);
+          if(c.buttonEmoji) btn.setEmoji(c.buttonEmoji);
+          await msg.edit({embeds:[embed],components:[new ActionRowBuilder().addComponents(btn)]}).catch(()=>{});
+        }
+      }
+      return interaction.reply({content:'✅ Ticket details saved. The single-ticket public panel was updated; new tickets will use the updated details. Multi-ticket types use their own ticket embed when opened.',ephemeral:true});
     }
     if (interaction.isButton() && interaction.customId.startsWith('ticket:managecategory:')) {
       const id=interaction.customId.split(':')[2], c=data.tickets[id];
