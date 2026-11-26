@@ -413,14 +413,20 @@ function normalizeEmbedMarkdown(value) {
     }
     if (inCodeBlock) return line;
 
-    // Normalize Discord headings and avoid nested bold markers around heading text.
-    // A heading is already emphasized by Discord, so "# **Title**" becomes "# Title".
     const clean = line.replace(/^[\t ]+/, '');
-    const heading = clean.match(/^(#{1,3})\s+\*\*(.+?)\*\*\s*$/);
-    if (heading) return `${heading[1]} ${heading[2]}`;
+    const heading = clean.match(/^(#{1,3})\s+(.+?)\s*$/);
+    if (!heading) return clean.replace(/^(#{1,3})(?=\S)/, '$1 ');
 
-    // Discord requires a space after heading markers.
-    return clean.replace(/^(#{1,3})(?=\S)/, '$1 ');
+    const level = heading[1].length;
+    let text = heading[2].trim();
+    // Remove optional bold/italic wrappers before applying the level's embed-safe style.
+    text = text.replace(/^\*{1,3}([\s\S]*?)\*{1,3}$/, '$1').trim();
+
+    // Embed descriptions reliably render level-one headings. Emulate lower levels
+    // with inline Markdown so ## and ### never appear as literal hash characters.
+    if (level === 1) return `# ${text}`;
+    if (level === 2) return `**${text}**`;
+    return `***${text}***`;
   }).join('\n');
 }
 
