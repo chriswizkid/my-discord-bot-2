@@ -137,6 +137,8 @@ async function initializeMongoDB() {
     } catch (lockError) {
       if (lockError?.code === 11000) {
         console.error('FATAL: Another 3ST bot instance already holds the runtime lock. This instance will remain disabled.');
+        if (mongoClient) await mongoClient.close().catch(() => {});
+        mongoClient = null;
         return false;
       }
       throw lockError;
@@ -145,6 +147,8 @@ async function initializeMongoDB() {
     const heldLock = await runtimeLockCollection.findOne({ _id: '3st-discord-bot-runtime' });
     if (heldLock?.owner !== runtimeInstanceId) {
       console.error('FATAL: Could not acquire the 3ST bot runtime lock. This instance will remain disabled.');
+      if (mongoClient) await mongoClient.close().catch(() => {});
+      mongoClient = null;
       return false;
     }
 
@@ -189,6 +193,26 @@ async function initializeMongoDB() {
     console.error('FATAL: MongoDB/runtime lock initialization failed; bot commands will stay disabled:', error.message);
     return false;
   }
+}
+
+async function releaseRuntimeLock() {
+  runtimeReady = false;
+  if (runtimeLockHeartbeat) clearInterval(runtimeLockHeartbeat);
+  runtimeLockHeartbeat = null;
+  if (runtimeLockCollection) {
+    await runtimeLockCollection.deleteOne({ _id: '3st-discord-bot-runtime', owner: runtimeInstanceId }).catch(() => {});
+  }
+  if (mongoClient) await mongoClient.close().catch(() => {});
+  mongoClient = null;
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, async () => {
+    console.log('Shutting down 3ST Bot and releasing runtime lock...');
+    client.destroy();
+    await releaseRuntimeLock();
+    process.exit(0);
+  });
 }
 
 const THREE_ST_GUILD_ID = '1564309904704020560';
