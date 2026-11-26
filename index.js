@@ -1929,6 +1929,14 @@ async function handleCommandMessage(message) {
       return message.channel.send({embeds:[new EmbedBuilder().setColor(0x5865F2).setTitle('3ST Bot • Webhook Studio').setDescription('Create a webhook, compose branded messages with embeds, add link buttons, and manage webhooks created by 3ST Bot.')],components:[row]});
     }
 
+    // EDIT EXISTING TICKET PANELS — available any time with -editticket.
+    if (cmd === 'editticket' || cmd === 'ticketedit') {
+      if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
+      const configs = Object.entries(data.tickets).filter(([id,c]) => c.guildId === message.guild.id && c.categoryId && c.buttonLabel);
+      if (!configs.length) return sendTemp(message.channel, '❌ No configured ticket panels were found.', 5000);
+      const menu = new StringSelectMenuBuilder().setCustomId('ticket:managepick').setPlaceholder('Choose a ticket type to edit').setMinValues(1).setMaxValues(1).addOptions(configs.slice(0,25).map(([id,c]) => ({label:String(c.name || 'Ticket').slice(0,100),description:String(c.buttonLabel || 'Open Ticket').slice(0,100),value:id})));
+      return message.channel.send({content:'🛠️ **3ST Ticket Manager**\nChoose a ticket type to edit its details, button, category, staff visibility/mentions, or public panel appearance.',components:[new ActionRowBuilder().addComponents(menu)]});
+    }
     // TICKET PANEL CREATOR — ?ticket posts a setup button; the button opens the modal.
     if (cmd === 'ticket') {
       if (!hasPerm(message.member, PermissionsBitField.Flags.ManageGuild)) return sendTemp(message.channel, '❌ You need **Manage Server** permission.', 5000);
@@ -2702,6 +2710,47 @@ client.on('interactionCreate', async (interaction) => {
     if(interaction.isButton()&&interaction.customId==='webhook:deletecancel')
       return interaction.update({content:'Webhook deletion cancelled.',components:[]});
 
+    if (interaction.isStringSelectMenu() && interaction.customId === 'ticket:managepick') {
+      const id=interaction.values[0], c=data.tickets[id];
+      if(!c||c.guildId!==interaction.guildId) return interaction.reply({content:'❌ Ticket configuration not found.',ephemeral:true});
+      if(interaction.user.id!==c.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can edit this.',ephemeral:true});
+      const row1=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket:managedetails:'+id).setLabel('Edit Ticket Details').setEmoji('📝').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('ticket:buttonsetup:'+id).setLabel('Edit Button').setEmoji('🎨').setStyle(ButtonStyle.Secondary));
+      const row2=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket:managecategory:'+id).setLabel('Change Category').setEmoji('📁').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('ticket:managetags:'+id).setLabel('Who Can See / Mention').setEmoji('👥').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('ticket:panelsetup:'+(c.panelGroupId||id)).setLabel('Edit Public Panel').setEmoji('🖼️').setStyle(ButtonStyle.Secondary));
+      return interaction.reply({content:'**Manage this ticket type**\nChanges to category and staff access apply to new tickets. Public panel appearance can be edited separately.',components:[row1,row2],ephemeral:true});
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:managedetails:')) {
+      const id=interaction.customId.split(':')[2], c=data.tickets[id];
+      if(!c||c.guildId!==interaction.guildId) return interaction.reply({content:'❌ Ticket configuration not found.',ephemeral:true});
+      if(interaction.user.id!==c.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can edit this.',ephemeral:true});
+      const modal=new ModalBuilder().setCustomId('ticket:managedetailsmodal:'+id).setTitle('Edit Ticket Details');
+      const f=(field,label,value,style,max)=>new TextInputBuilder().setCustomId(field).setLabel(label).setValue(String(value??'').slice(0,max)).setStyle(style).setRequired(true).setMaxLength(max);
+      modal.addComponents(new ActionRowBuilder().addComponents(f('edit:name','Ticket/channel name',c.name||'ticket',TextInputStyle.Short,80)),new ActionRowBuilder().addComponents(f('edit:title','Ticket embed title',c.title||c.name||'Create Ticket',TextInputStyle.Short,256)),new ActionRowBuilder().addComponents(f('edit:description','Ticket description',c.description||'How can we help?',TextInputStyle.Paragraph,1000)),new ActionRowBuilder().addComponents(f('edit:color','Ticket/channel color (#HEX)','#'+Number(c.color??0x5865F2).toString(16).padStart(6,'0'),TextInputStyle.Short,7)),new ActionRowBuilder().addComponents(f('edit:embedcolor','Embed color (#HEX)','#'+Number(c.embedColor??0x5865F2).toString(16).padStart(6,'0'),TextInputStyle.Short,7)));
+      return interaction.showModal(modal);
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:managedetailsmodal:')) {
+      const id=interaction.customId.split(':')[2], c=data.tickets[id];
+      if(!c||c.guildId!==interaction.guildId) return interaction.reply({content:'❌ Ticket configuration not found.',ephemeral:true});
+      if(interaction.user.id!==c.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can edit this.',ephemeral:true});
+      const hex=v=>{v=String(v||'').trim().replace(/^#/,'');return /^[0-9a-fA-F]{6}$/.test(v)?parseInt(v,16):null;};
+      const name=interaction.fields.getTextInputValue('edit:name').trim(), title=interaction.fields.getTextInputValue('edit:title').trim(), description=interaction.fields.getTextInputValue('edit:description').trim(), color=hex(interaction.fields.getTextInputValue('edit:color')), embedColor=hex(interaction.fields.getTextInputValue('edit:embedcolor'));
+      if(!name||!title||!description||color===null||embedColor===null) return interaction.reply({content:'❌ Check the fields and use 6-digit hex colors such as #5865F2.',ephemeral:true});
+      Object.assign(c,{name,title,description,color,embedColor}); saveData();
+      return interaction.reply({content:'✅ Ticket details saved. New tickets will use the updated name, description, and colors.',ephemeral:true});
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:managecategory:')) {
+      const id=interaction.customId.split(':')[2], c=data.tickets[id];
+      if(!c||c.guildId!==interaction.guildId) return interaction.reply({content:'❌ Ticket configuration not found.',ephemeral:true});
+      if(interaction.user.id!==c.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can edit this.',ephemeral:true});
+      const select=new ChannelSelectMenuBuilder().setCustomId('ticket:setupcategory:'+id).setPlaceholder('Choose the new ticket category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
+      return interaction.reply({content:'Choose the category for future tickets:',components:[new ActionRowBuilder().addComponents(select)],ephemeral:true});
+    }
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:managetags:')) {
+      const id=interaction.customId.split(':')[2], c=data.tickets[id];
+      if(!c||c.guildId!==interaction.guildId) return interaction.reply({content:'❌ Ticket configuration not found.',ephemeral:true});
+      if(interaction.user.id!==c.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can edit this.',ephemeral:true});
+      const select=new MentionableSelectMenuBuilder().setCustomId('ticket:settag:'+id).setPlaceholder('Select who can see the ticket').setMinValues(1).setMaxValues(25);
+      return interaction.reply({content:'Select the roles/users who should have access. You will choose whether they are mentioned afterwards.',components:[new ActionRowBuilder().addComponents(select)],ephemeral:true});
+    }
     if (interaction.isButton() && interaction.customId.startsWith('ticket:setupopen:')) {
       const id=interaction.customId.split(':')[2], config=data.tickets[id];
       if(!config||config.guildId!==interaction.guildId) return interaction.reply({content:'❌ This ticket setup no longer exists.',ephemeral:true});
