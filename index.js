@@ -33,6 +33,7 @@ let mongoClient = null;
 let mongoCollection = null;
 let mongoSaveQueue = Promise.resolve();
 let runtimeLockCollection = null;
+let processedCommandCollection = null;
 let runtimeLockHeartbeat = null;
 let runtimeReady = false;
 const runtimeInstanceId = `${process.pid}-${crypto.randomUUID()}`;
@@ -115,6 +116,11 @@ async function initializeMongoDB() {
     await mongoClient.connect();
     const db = MONGODB_DB_NAME ? mongoClient.db(MONGODB_DB_NAME) : mongoClient.db();
 
+    // Cross-process command idempotency prevents duplicate destructive actions
+    // even if the host briefly runs overlapping containers during a restart.
+    processedCommandCollection = db.collection('processed_commands');
+    await processedCommandCollection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
     // Acquire a distributed single-instance lease before enabling any handlers.
     // This prevents two ModVC instances/deployments from executing each command.
     runtimeLockCollection = db.collection('runtime_locks');
@@ -188,6 +194,7 @@ async function initializeMongoDB() {
     return true;
   } catch (error) {
     mongoCollection = null;
+    processedCommandCollection = null;
     if (mongoClient) await mongoClient.close().catch(() => {});
     mongoClient = null;
     console.error('FATAL: MongoDB/runtime lock initialization failed; bot commands will stay disabled:', error.message);
@@ -1334,9 +1341,32 @@ const processedCommandMessageIds = new Set();
 async function handleCommandMessage(message) {
   if (!runtimeReady) return;
   if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
-  // Discord message events should be handled once. This guard prevents a
-  // duplicate listener/event delivery from repeating destructive commands
-  // or sending the same embed more than once.
+
+  // Claim prefix-command messages in MongoDB as well as in memory. This is a
+  // cross-process guard: only one container can process a given Discord
+  // message ID, even during overlapping host restarts or a lease handover.
+  const configuredMessagePrefix = getPrefix(message.guild.id);
+  const mentionCommandPattern = new RegExp('^<@!?' + client.user.id + '>\\s*\\S');
+  const isPrefixCommand = Boolean(configuredMessagePrefix && message.content.startsWith(configuredMessagePrefix));
+  if (isPrefixCommand || mentionCommandPattern.test(message.content || '')) {
+    if (!processedCommandCollection) {
+      console.error('[COMMAND DEDUPE] MongoDB claim collection is unavailable; command blocked for safety.');
+      return;
+    }
+    try {
+      await processedCommandCollection.insertOne({
+        _id: message.id,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+      });
+    } catch (error) {
+      if (error?.code === 11000) return; // Another process already claimed this message.
+      console.error('[COMMAND DEDUPE] Could not claim command message; command blocked:', error.message);
+      return;
+    }
+  }
+
+  // In-process guard also covers duplicate event delivery within this process.
   if (processedCommandMessageIds.has(message.id)) return;
   processedCommandMessageIds.add(message.id);
   if (processedCommandMessageIds.size > 10000) {
