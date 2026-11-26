@@ -349,7 +349,7 @@ function scheduleWebhookJob(job){
       if(!record)throw new Error('Saved webhook no longer exists.');
       const embed=new EmbedBuilder().setColor(Number.parseInt(job.color||'5865F2',16));
       if(job.title)embed.setTitle(job.title);
-      if(job.description)embed.setDescription(job.description);
+      if(job.description)embed.setDescription(normalizeEmbedMarkdown(job.description));
       const hook=new WebhookClient({id:record.id,token:record.token});
       const sent=await hook.send({content:job.content||undefined,embeds:[job.title||job.description?embed:null].filter(Boolean),allowedMentions:{parse:[]}});
       record.lastMessageId=sent.id;
@@ -2643,7 +2643,7 @@ client.on('interactionCreate', async (interaction) => {
       if(!Number.isFinite(runAt)||runAt<=Date.now())return interaction.reply({content:'❌ Enter a valid future date and time.',ephemeral:true});
       const content=interaction.fields.getTextInputValue('webhook:content').trim();
       const title=interaction.fields.getTextInputValue('webhook:title').trim();
-      const description=interaction.fields.getTextInputValue('webhook:description').trim();
+      const description=normalizeEmbedMarkdown(interaction.fields.getTextInputValue('webhook:description'));
       const color=(interaction.fields.getTextInputValue('webhook:color').trim()||'#5865F2').replace(/^#/,'');
       if(!/^[0-9a-fA-F]{6}$/.test(color))return interaction.reply({content:'❌ Embed colour must be a six-digit hex value.',ephemeral:true});
       if(!content&&!title&&!description)return interaction.reply({content:'❌ Add message content or an embed title/description.',ephemeral:true});
