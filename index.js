@@ -25,12 +25,17 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
+const crypto = require('crypto');
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME;
 let mongoClient = null;
 let mongoCollection = null;
 let mongoSaveQueue = Promise.resolve();
+let runtimeLockCollection = null;
+let runtimeLockHeartbeat = null;
+let runtimeReady = false;
+const runtimeInstanceId = `${process.pid}-${crypto.randomUUID()}`;
 
 const TOKEN = process.env.DISCORD_TOKEN || process.env.MY_DISC_TOKEN || process.env['my disc token'];
 if (!TOKEN) throw new Error('Missing DISCORD_TOKEN environment variable.');
@@ -101,14 +106,69 @@ function saveData() {
 
 async function initializeMongoDB() {
   if (!MONGODB_URI) {
-    console.warn('MONGODB_URI is not set; using DATA_FILE only.');
-    return;
+    console.error('FATAL: MONGODB_URI is not set. A shared runtime lock is required to prevent multiple 3ST bot instances.');
+    return false;
   }
 
   try {
     mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
     await mongoClient.connect();
     const db = MONGODB_DB_NAME ? mongoClient.db(MONGODB_DB_NAME) : mongoClient.db();
+
+    // Acquire a distributed single-instance lease before enabling any handlers.
+    // This prevents two ModVC instances/deployments from executing each command.
+    runtimeLockCollection = db.collection('runtime_locks');
+    const now = new Date();
+    try {
+      await runtimeLockCollection.updateOne(
+        {
+          _id: '3st-discord-bot-runtime',
+          $or: [{ expiresAt: { $lte: now } }, { owner: runtimeInstanceId }]
+        },
+        {
+          $set: {
+            owner: runtimeInstanceId,
+            expiresAt: new Date(Date.now() + 90000),
+            updatedAt: now
+          }
+        },
+        { upsert: true }
+      );
+    } catch (lockError) {
+      if (lockError?.code === 11000) {
+        console.error('FATAL: Another 3ST bot instance already holds the runtime lock. This instance will remain disabled.');
+        return false;
+      }
+      throw lockError;
+    }
+
+    const heldLock = await runtimeLockCollection.findOne({ _id: '3st-discord-bot-runtime' });
+    if (heldLock?.owner !== runtimeInstanceId) {
+      console.error('FATAL: Could not acquire the 3ST bot runtime lock. This instance will remain disabled.');
+      return false;
+    }
+
+    runtimeLockHeartbeat = setInterval(async () => {
+      try {
+        const result = await runtimeLockCollection.updateOne(
+          { _id: '3st-discord-bot-runtime', owner: runtimeInstanceId },
+          { $set: { expiresAt: new Date(Date.now() + 90000), updatedAt: new Date() } }
+        );
+        if (!result.matchedCount) {
+          console.error('FATAL: 3ST runtime lock was lost. Disabling this bot process.');
+          runtimeReady = false;
+          client.destroy();
+          if (mongoClient) await mongoClient.close().catch(() => {});
+          clearInterval(runtimeLockHeartbeat);
+        }
+      } catch (error) {
+        console.error('3ST runtime lock heartbeat failed:', error.message);
+        runtimeReady = false;
+        client.destroy();
+      }
+    }, 30000);
+    runtimeLockHeartbeat.unref?.();
+
     const collection = db.collection('bot_state');
     const stored = await collection.findOne({ _id: 'main' });
 
@@ -116,17 +176,18 @@ async function initializeMongoDB() {
       data = { ...defaultData, ...stored.payload };
       console.log('Loaded bot data from MongoDB.');
     } else {
-      // First connection: migrate the existing local data.json into MongoDB.
       await collection.insertOne({ _id: 'main', payload: structuredClone(data), updatedAt: new Date() });
       console.log('Migrated existing DATA_FILE data into MongoDB.');
     }
-    // Only start database writes after the initial load/import has completed.
     mongoCollection = collection;
+    console.log('Acquired 3ST single-instance runtime lock.');
+    return true;
   } catch (error) {
     mongoCollection = null;
     if (mongoClient) await mongoClient.close().catch(() => {});
     mongoClient = null;
-    console.error('MongoDB connection failed; continuing with DATA_FILE only:', error.message);
+    console.error('FATAL: MongoDB/runtime lock initialization failed; bot commands will stay disabled:', error.message);
+    return false;
   }
 }
 
@@ -1151,7 +1212,13 @@ function ordinalSuffix(n) {
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  await initializeMongoDB();
+  runtimeReady = false;
+  const lockAcquired = await initializeMongoDB();
+  if (!lockAcquired) {
+    console.error('3ST Bot handlers are disabled on this instance. Check ModVC for duplicate running instances.');
+    client.destroy();
+    return;
+  }
   await initializeInviteSnapshots();
   await recoverTicketPanels().catch(err => console.error('Ticket recovery error:', err));
   await restore67Effects().catch(err => console.error('67 effect recovery error:', err));
@@ -1160,10 +1227,13 @@ client.once('ready', async () => {
   const registeredSlashCommands = await client.application.commands.set(slashCommands, THREE_ST_GUILD_ID);
   console.log(`Registered ${registeredSlashCommands.size} 3ST guild slash commands for ${THREE_ST_GUILD_ID}.`);
   client.user.setPresence({ activities: [{ name: 'With chris_wizkid', type: 0 }], status: 'online' });
+  runtimeReady = true;
+  console.log('3ST Bot is ready; command handlers enabled.');
 });
 
 // React to every new message from members with an active timed effect or the Blehhh role.
 client.on('messageCreate', async (message) => {
+  if (!runtimeReady) return;
   if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
 
   // Timed reactions (Birthday / Poop) are independent of the Blehhh role.
@@ -1238,6 +1308,7 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
 const processedCommandMessageIds = new Set();
 
 async function handleCommandMessage(message) {
+  if (!runtimeReady) return;
   if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
   // Discord message events should be handled once. This guard prevents a
   // duplicate listener/event delivery from repeating destructive commands
