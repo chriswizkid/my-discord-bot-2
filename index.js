@@ -406,6 +406,7 @@ async function performEmergencyCleanup(guild) {
 function normalizeEmbedMarkdown(value) {
   const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
   let inCodeBlock = false;
+
   return lines.map(line => {
     if (/^\s*```/.test(line)) {
       inCodeBlock = !inCodeBlock;
@@ -415,18 +416,17 @@ function normalizeEmbedMarkdown(value) {
 
     const clean = line.replace(/^[\t ]+/, '');
     const heading = clean.match(/^(#{1,3})\s+(.+?)\s*$/);
-    if (!heading) return clean.replace(/^(#{1,3})(?=\S)/, '$1 ');
+    if (!heading) return clean;
 
-    const level = heading[1].length;
-    let text = heading[2].trim();
-    // Remove optional bold/italic wrappers before applying the level's embed-safe style.
-    text = text.replace(/^\*{1,3}([\s\S]*?)\*{1,3}$/, '$1').trim();
+    // Discord's native heading parser expects the heading marker at the
+    // beginning of the line. Strip inline emphasis wrappers inside headings
+    // so that #, ## and ### are parsed as actual heading levels.
+    const content = heading[2]
+      .replace(/^\*{1,3}([\s\S]*?)\*{1,3}$/, '$1')
+      .replace(/^__([\s\S]*?)__$/, '$1')
+      .trim();
 
-    // Embed descriptions reliably render level-one headings. Emulate lower levels
-    // with inline Markdown so ## and ### never appear as literal hash characters.
-    if (level === 1) return `# ${text}`;
-    if (level === 2) return `**${text}**`;
-    return `***${text}***`;
+    return `${heading[1]} ${content}`;
   }).join('\n');
 }
 
