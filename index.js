@@ -2860,7 +2860,7 @@ client.on('interactionCreate', async (interaction) => {
       if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId(`ticket:buttonmodal:${id}`).setTitle('Customize Ticket Button');
       const f=(field,label,placeholder,required,max)=>new TextInputBuilder().setCustomId(field).setLabel(label).setPlaceholder(placeholder).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
-      const field=(id,label,placeholder,value,required,max)=>new TextInputBuilder().setCustomId(id).setLabel(label).setPlaceholder(placeholder).setValue(String(value||'').slice(0,max)).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
+      const field=(id,label,placeholder,value,required,max)=>{const input=new TextInputBuilder().setCustomId(id).setLabel(label).setPlaceholder(placeholder).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);if(String(value||''))input.setValue(String(value).slice(0,max));return input;};
       modal.addComponents(
         new ActionRowBuilder().addComponents(field('ticket:buttonlabel','Button label','Open Ticket',config.buttonLabel||'Open Ticket',true,80)),
         new ActionRowBuilder().addComponents(field('ticket:buttonemoji','Button emoji','🎟️',config.buttonEmoji||'',false,100)),
