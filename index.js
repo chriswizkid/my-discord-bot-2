@@ -404,30 +404,15 @@ async function performEmergencyCleanup(guild) {
   return internalDeleted;
 }
 function normalizeEmbedMarkdown(value) {
-  const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
-  let inCodeBlock = false;
-
-  return lines.map(line => {
-    if (/^\s*```/.test(line)) {
-      inCodeBlock = !inCodeBlock;
-      return line;
-    }
-    if (inCodeBlock) return line;
-
-    const clean = line.replace(/^[\t ]+/, '');
-    const heading = clean.match(/^(#{1,3})\s+(.+?)\s*$/);
-    if (!heading) return clean;
-
-    // Discord's native heading parser expects the heading marker at the
-    // beginning of the line. Strip inline emphasis wrappers inside headings
-    // so that #, ## and ### are parsed as actual heading levels.
-    const content = heading[2]
-      .replace(/^\*{1,3}([\s\S]*?)\*{1,3}$/, '$1')
-      .replace(/^__([\s\S]*?)__$/, '$1')
-      .trim();
-
-    return `${heading[1]} ${content}`;
-  }).join('\n');
+  // Keep Discord's Markdown syntax intact. Only normalise line endings and
+  // remove indentation before block-level syntax; do not strip **bold** from
+  // headings or rewrite heading levels.
+  return String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.replace(/^[\t ]+(?=(?:#{1,3}\s|-#\s|>\s|[-*+]\s|\d+\.\s))/, ''))
+    .map(line => line.replace(/^(#{1,3})(?=\S)/, '$1 '))
+    .join('\n');
 }
 
 async function sendTemp(channel, content, ms = 7000) {
@@ -1250,8 +1235,19 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
   });
 });
 
+const processedCommandMessageIds = new Set();
+
 async function handleCommandMessage(message) {
   if (!message.guild || message.guild.id !== THREE_ST_GUILD_ID || message.author.bot) return;
+  // Discord message events should be handled once. This guard prevents a
+  // duplicate listener/event delivery from repeating destructive commands
+  // or sending the same embed more than once.
+  if (processedCommandMessageIds.has(message.id)) return;
+  processedCommandMessageIds.add(message.id);
+  if (processedCommandMessageIds.size > 10000) {
+    const oldestIds = [...processedCommandMessageIds].slice(0, 5000);
+    for (const id of oldestIds) processedCommandMessageIds.delete(id);
+  }
   if (data.active67?.[key(message.guild.id,message.author.id)]) {
     const emoji=message.guild.emojis.cache.find(e=>e.name==='6777');
     if(emoji)await message.react(emoji).catch(()=>{});
@@ -1876,9 +1872,13 @@ async function handleCommandMessage(message) {
 
       // Delete the requested number of other messages, plus the user's command.
       const fetched = await message.channel.messages.fetch({ limit: Math.min(100, amount + 1) });
-      const deleted = await message.channel.bulkDelete(fetched, true);
-      const deletedOtherMessages = Math.max(0, deleted.size - (deleted.has(message.id) ? 1 : 0));
-      // Explicitly remove the command too (including cases where bulkDelete skipped it).
+      // Exclude the command from the bulk-delete collection, then delete it
+      // once separately. This avoids counting/attempting to delete it twice.
+      const targetsToDelete = fetched.filter(item => item.id !== message.id).first(amount);
+      const deleted = targetsToDelete.length
+        ? await message.channel.bulkDelete(targetsToDelete, true)
+        : new Map();
+      const deletedOtherMessages = deleted.size;
       await safeDelete(message);
 
       if (deletedOtherMessages > 10) {
