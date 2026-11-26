@@ -2355,7 +2355,7 @@ async function handleCommandMessage(message) {
       const attachment = message.attachments.find(a => a.contentType?.startsWith('image/'));
       if (!embedText && !attachment) return sendTemp(message.channel, `Usage: ${prefix}embed #0000FF <message text> (or attach an image)`, 7000);
       const embed = new EmbedBuilder().setColor(parseInt(color, 16));
-      if (embedText) embed.setDescription(normalizeEmbedMarkdown(embedText).slice(0, 4096));
+      if (embedText) embed.setDescription(embedText.slice(0, 4096));
       if (attachment) embed.setImage(attachment.url);
       await message.channel.send({ embeds: [embed], allowedMentions: { parse: ['users', 'roles'] } });
       return;
