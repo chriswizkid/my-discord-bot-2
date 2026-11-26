@@ -2739,7 +2739,7 @@ client.on('interactionCreate', async (interaction) => {
         const ch=await client.channels.fetch(c.panelChannelId).catch(()=>null);
         const msg=ch?.messages?await ch.messages.fetch(c.panelMessageId).catch(()=>null):null;
         if(msg) {
-          const embed=new EmbedBuilder().setColor(embedColor).setTitle(title).setDescription(description)
+          const embed=new EmbedBuilder().setColor(embedColor).setTitle(title).setDescription(normalizeEmbedMarkdown(description))
             .setFooter({text:c.footerText||'3ST Bot ~ Built for Rivals. United by 3ST.',iconURL:client.user.displayAvatarURL()});
           const btn=new ButtonBuilder().setCustomId('ticket:create:'+id).setLabel(c.buttonLabel||'Open Ticket').setStyle(c.buttonStyle||ButtonStyle.Primary);
           if(c.buttonEmoji) btn.setEmoji(c.buttonEmoji);
@@ -2892,7 +2892,7 @@ client.on('interactionCreate', async (interaction) => {
       const buildTicketEmbed = ticketId => {
         const ticketConfig = data.tickets[ticketId];
         const parentGroup = ticketConfig.panelGroupId ? data.ticketPanels[ticketConfig.panelGroupId] : null;
-        const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(ticketConfig.description || 'Open a ticket using the button below.');
+        const embed = new EmbedBuilder().setColor(ticketConfig.embedColor ?? 0x5865F2).setTitle(ticketConfig.title || ticketConfig.name || 'Create Ticket').setDescription(normalizeEmbedMarkdown(ticketConfig.description || 'Open a ticket using the button below.'));
         embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL: client.user.displayAvatarURL() });
         return embed;
       };
@@ -2905,7 +2905,7 @@ client.on('interactionCreate', async (interaction) => {
         const panelEmbed = new EmbedBuilder()
           .setColor(group.embedColor ?? 0x232428)
           .setTitle(group.panelTitle || 'General Support 📬')
-          .setDescription(group.panelDescription || 'Choose a ticket type below and our team will help you.')
+          .setDescription(normalizeEmbedMarkdown(group.panelDescription || 'Choose a ticket type below and our team will help you.'))
           .setFooter({ text: group.footerText || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL: client.user.displayAvatarURL() });
         const panelButtons = configuredIds.map(buildTicketButton);
         const panelRows = [];
@@ -2996,7 +2996,7 @@ client.on('interactionCreate', async (interaction) => {
       if (channel?.messages && messageId) panelMessage = await channel.messages.fetch(messageId).catch(() => null);
       if (panelMessage) {
         const embed = new EmbedBuilder().setColor(group?.embedColor ?? config?.embedColor ?? 0x232428)
-          .setTitle(title).setDescription(description)
+          .setTitle(title).setDescription(normalizeEmbedMarkdown(description))
           .setFooter({ text: footerText, iconURL: client.user.displayAvatarURL() });
         await panelMessage.edit({ embeds: [embed] });
       }
@@ -3040,7 +3040,7 @@ client.on('interactionCreate', async (interaction) => {
         {id:client.user.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory,PermissionsBitField.Flags.ManageChannels,PermissionsBitField.Flags.ManageMessages]}
       ]}); }catch(err){console.error('Ticket channel creation error:',err);return interaction.reply({content:'❌ I could not create the ticket. Check Manage Channels and the selected category.',ephemeral:true});}
       const close=new ButtonBuilder().setCustomId('ticket:close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger);
-      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL:client.user.displayAvatarURL()});
+      const emb=new EmbedBuilder().setColor(config.color).setTitle(config.name).setDescription(normalizeEmbedMarkdown(config.description + `\n\nWelcome ${interaction.user}! A staff member will help you here.\n\nClick **Close Ticket** when you are finished.`)).setFooter({text:config.footerText || (config.panelGroupId ? data.ticketPanels[config.panelGroupId]?.footerText : null) || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL:client.user.displayAvatarURL()});
       const tagIds=config.tagIds || (config.tagId?[config.tagId]:[]);
       const tagTypes=config.tagTypes || (config.tagType?[config.tagType]:[]);
       const notifySelectedTags = config.tagMode !== 'access'; // Existing panels retain their prior mention behaviour.
