@@ -411,11 +411,16 @@ function normalizeEmbedMarkdown(value) {
       inCodeBlock = !inCodeBlock;
       return line;
     }
-    // Discord headings render in embed descriptions when # starts the line.
-    // Remove accidental indentation without changing fenced code blocks.
     if (inCodeBlock) return line;
-    // Discord requires a space after heading markers; normalize indented and compact input.
-    return line.replace(/^[\t ]+/, '').replace(/^(#{1,3})(?=\S)/, '$1 ');
+
+    // Normalize Discord headings and avoid nested bold markers around heading text.
+    // A heading is already emphasized by Discord, so "# **Title**" becomes "# Title".
+    const clean = line.replace(/^[\t ]+/, '');
+    const heading = clean.match(/^(#{1,3})\s+\*\*(.+?)\*\*\s*$/);
+    if (heading) return `${heading[1]} ${heading[2]}`;
+
+    // Discord requires a space after heading markers.
+    return clean.replace(/^(#{1,3})(?=\S)/, '$1 ');
   }).join('\n');
 }
 
