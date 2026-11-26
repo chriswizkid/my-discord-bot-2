@@ -2849,10 +2849,11 @@ client.on('interactionCreate', async (interaction) => {
       if(interaction.user.id!==config.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can configure this.',ephemeral:true});
       const modal=new ModalBuilder().setCustomId(`ticket:buttonmodal:${id}`).setTitle('Customize Ticket Button');
       const f=(field,label,placeholder,required,max)=>new TextInputBuilder().setCustomId(field).setLabel(label).setPlaceholder(placeholder).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
+      const field=(id,label,placeholder,value,required,max)=>new TextInputBuilder().setCustomId(id).setLabel(label).setPlaceholder(placeholder).setValue(String(value||'').slice(0,max)).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
       modal.addComponents(
-        new ActionRowBuilder().addComponents(f('ticket:buttonlabel','Button label','Open Ticket',true,80)),
-        new ActionRowBuilder().addComponents(f('ticket:buttonemoji','Button emoji','🎟️',false,100)),
-        new ActionRowBuilder().addComponents(f('ticket:buttoncolor','Button color','Blue, Grey, Green, or Red',true,10))
+        new ActionRowBuilder().addComponents(field('ticket:buttonlabel','Button label','Open Ticket',config.buttonLabel||'Open Ticket',true,80)),
+        new ActionRowBuilder().addComponents(field('ticket:buttonemoji','Button emoji','🎟️',config.buttonEmoji||'',false,100)),
+        new ActionRowBuilder().addComponents(field('ticket:buttoncolor','Button color','Blue, Grey, Green, or Red',config.buttonStyleName||'blue',true,10))
       );
       return interaction.showModal(modal);
     }
@@ -2884,7 +2885,7 @@ client.on('interactionCreate', async (interaction) => {
         embed.setFooter({ text: ticketConfig.footerText || parentGroup?.footerText || '3ST Bot ~ Built for Rivals. United by 3ST.', iconURL: client.user.displayAvatarURL() });
         return embed;
       };
-      config.panelChannelId=interaction.channel.id;
+      if(!config.panelChannelId) config.panelChannelId=interaction.channel.id;
       const group = config.panelGroupId ? data.ticketPanels[config.panelGroupId] : null;
       let panelMessage;
       if(group) {
@@ -2916,8 +2917,15 @@ client.on('interactionCreate', async (interaction) => {
       } else {
         const open=buildTicketButton(id);
         const embed=buildTicketEmbed(id);
-        panelMessage=await interaction.channel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
-        config.panelMessageId=panelMessage.id;
+        const panelChannel=config.panelChannelId?await client.channels.fetch(config.panelChannelId).catch(()=>null):interaction.channel;
+        if(panelChannel?.messages && config.panelMessageId) panelMessage=await panelChannel.messages.fetch(config.panelMessageId).catch(()=>null);
+        if(panelMessage) await panelMessage.edit({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
+        else {
+          if(!panelChannel?.isTextBased()) return interaction.reply({content:'❌ I could not find the channel where this ticket panel should be posted.',ephemeral:true});
+          panelMessage=await panelChannel.send({embeds:[embed],components:[new ActionRowBuilder().addComponents(open)]});
+          config.panelChannelId=panelMessage.channelId;
+          config.panelMessageId=panelMessage.id;
+        }
         saveData();
       }
       const configuredCount = group ? group.ticketIds.filter(ticketId => data.tickets[ticketId]?.buttonLabel && data.tickets[ticketId]?.categoryId).length : 5;
