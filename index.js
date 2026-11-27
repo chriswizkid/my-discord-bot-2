@@ -2932,7 +2932,7 @@ client.on('interactionCreate', async (interaction) => {
       config.accessTagIds=[]; config.accessTagTypes=[]; config.pingTagIds=[]; config.pingTagTypes=[]; saveData();
       const tagSelect=new MentionableSelectMenuBuilder().setCustomId('ticket:setaccess:'+id).setPlaceholder('Who gets access only?').setMinValues(0).setMaxValues(25);
       const pingSelect=new MentionableSelectMenuBuilder().setCustomId('ticket:setping:'+id).setPlaceholder('Who gets access + mention?').setMinValues(0).setMaxValues(25);
-      const select=new ChannelSelectMenuBuilder()().setCustomId(`ticket:setupcategory:${id}`).setPlaceholder('Select Ticket Category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
+      const select=new ChannelSelectMenuBuilder().setCustomId(`ticket:setupcategory:${id}`).setPlaceholder('Select Ticket Category').setChannelTypes(ChannelType.GuildCategory).setMinValues(1).setMaxValues(1);
       const fmt=n=>`#${n.toString(16).padStart(6,'0').toUpperCase()}`;
       return interaction.reply({embeds:[new EmbedBuilder().setColor(embedColor).setTitle('🎟️ Ticket Panel Setup').setDescription(normalizeEmbedMarkdown(`**Ticket name:** ${name}\n**Ticket color:** ${fmt(color)}\n**Embed name:** ${title}\n**Embed color:** ${fmt(embedColor)}\n**Ticket description:** ${description}\n\nChoose access-only users/roles and access+mention users/roles separately. Both lists can be used.`))],components:[new ActionRowBuilder().addComponents(tagSelect),new ActionRowBuilder().addComponents(pingSelect),new ActionRowBuilder().addComponents(select)],ephemeral:true});
     }
