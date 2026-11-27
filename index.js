@@ -2895,6 +2895,11 @@ client.on('interactionCreate', async (interaction) => {
       const id=interaction.customId.split(':')[2], c=data.tickets[id];
       if(!c||c.guildId!==interaction.guildId) return interaction.reply({content:'❌ Ticket configuration not found.',ephemeral:true});
       if(interaction.user.id!==c.createdBy&&!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) return interaction.reply({content:'❌ Only the panel creator or Manage Server can edit this.',ephemeral:true});
+      if (!Array.isArray(c.accessTagIds) && !Array.isArray(c.pingTagIds)) {
+        const ids=c.tagIds||(c.tagId?[c.tagId]:[]), types=c.tagTypes||(c.tagType?[c.tagType]:[]);
+        c.accessTagIds=c.tagMode==='access'?[...ids]:[]; c.accessTagTypes=c.tagMode==='access'?[...types]:[];
+        c.pingTagIds=c.tagMode==='access'?[]:[...ids]; c.pingTagTypes=c.tagMode==='access'?[]:[...types]; saveData();
+      }
       const a=new MentionableSelectMenuBuilder().setCustomId('ticket:setaccess:'+id).setPlaceholder('Who gets access only?').setMinValues(0).setMaxValues(25);
       const p=new MentionableSelectMenuBuilder().setCustomId('ticket:setping:'+id).setPlaceholder('Who gets access + mention?').setMinValues(0).setMaxValues(25);
       return interaction.reply({content:'Set these lists separately. Both can be used together; only the second list gets mentioned.',components:[new ActionRowBuilder().addComponents(a),new ActionRowBuilder().addComponents(p)],ephemeral:true});
